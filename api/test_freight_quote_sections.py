@@ -84,3 +84,50 @@ class FreightQuoteSectionTests(SimpleTestCase):
         body = ('From: Seller <s@seller.example>\nSent: 1 May 2026\nINSURANCE PREMIUM : AED 3000\n'
                 'STORAGE CHARGE : USD 200/TEU\nRegards\nSeller Trading LLC')
         self.assertEqual(freight_offer_rows(body), [])
+
+
+CONFIRMATION_THREAD = """From: Buyer Person <buyer@buyer-group.example>
+Sent: Thursday, 2 July 2026 4:38 PM
+Subject: RE: Shipment of containers - JOB CONFIRMATION
+Dear Agent,
+Your below offer for shipment of 4 nos of 40FT containers are confirmed.
+4X40 HQ Container - Sea freight + Local charges : 8950 USD / Per Container = 8950 USD x 4 Nos = USD 35,800.00/-
+Net amount confirmed is : USD 35,800.00/-
+Kind Regards
+From Buyer Group, UAE
+From: Agent Person <agent@exco.example>
+Sent: Tuesday, 30 June 2026 12:38 PM
+Subject: RE: Shipment of containers
+Please find the sailing schedule.
+Agent Person | Sales Executive | EXCO Marine Logistics - Dubai
+"""
+
+
+class PriceCalculationTests(SimpleTestCase):
+    def test_unit_times_quantity_equals_total(self):
+        from api.services.price_calculation import calculation
+        calc = calculation('Freight : 8950 USD / Per Container = 8950 USD x 4 Nos = USD 35,800.00/-')
+        self.assertEqual((calc['unit_price'], calc['quantity'], calc['uom'], calc['line_total']),
+                         ('8950', '4', 'Container', '35800.00'))
+        # Arithmetic that does not hold is not a calculation.
+        self.assertIsNone(calculation('Item 100 USD x 3 Nos = USD 400'))
+        self.assertIsNone(calculation('Size 4X40 HQ container'))
+
+    def test_confirmed_rate_is_one_row_for_the_other_party(self):
+        rows = freight_offer_rows(CONFIRMATION_THREAD)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row['unit_price'], row['quantity'], row['line_total'], row['currency']),
+                         ('8950', '4', '35800.00', 'USD'))
+        self.assertEqual(row['product_name'], '4X40 HQ Container - Sea freight + Local charges')
+        self.assertEqual(row['supplier_name'], 'EXCO Marine Logistics')
+        self.assertEqual(row['purchase_date'], '2026-07-02')
+
+    def test_total_rows_collapse_into_unit_price_row(self):
+        from api.services.freight_quote_sections import collapse_calculated_totals
+        items = [dict(product_name='Valve DN50', unit_price='120', quantity='5', purchase_date='2026-07-02', currency='USD'),
+                 dict(product_name='Valve DN50 x 5 Nos =', unit_price='600', quantity=1, purchase_date='2026-07-02', currency='USD'),
+                 dict(product_name='Gasket', unit_price='600', quantity=1, purchase_date='2026-07-03', currency='USD')]
+        result = collapse_calculated_totals({'items': items})
+        self.assertEqual([i['product_name'] for i in result['items']], ['Valve DN50', 'Gasket'])
+        self.assertEqual(result['items'][0]['line_total'], '600')

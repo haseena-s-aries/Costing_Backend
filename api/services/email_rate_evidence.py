@@ -1,8 +1,43 @@
 """Recover explicit freight rates from each dated seller message."""
 import re
+from decimal import Decimal
 from .msg_commercial_history import (
     AMOUNT, clean, number, currency, split_thread, is_enquiry, _base,
 )
+
+CHARGE_WORDS = (r'\b(?:freight|EXW|transportation|delivery|door|fee|charges?|THC|PHC|DDO|seal|'
+                r'inspection|clearance|premium|EEC|yard)\b')
+# Words that open a new clause inside a sentence-style rate line.
+CLAUSE_BREAK = r'[,;]|\b(?:then|after|thereafter|where|which|when|we|you|will|can|shall|is|are)\b'
+# Conditions longer than this are kept as a source remark, not as part of
+# the item identity shown in the display name.
+MAX_CONDITION = 60
+
+
+def _label(text):
+    """Return the charge name only, never the surrounding sentence."""
+    text = re.sub(r'^subject(?:\s+to)?\s+(?=\S)', '', clean(text), flags=re.I)
+    if len(text.split()) > 6 or re.search(r'[,;]', text):
+        parts = [p.strip(' :–—-') for p in re.split(CLAUSE_BREAK, text, flags=re.I)]
+        tail = next((p for p in reversed(parts) if p and re.search(CHARGE_WORDS, p, re.I)), None)
+        if tail:
+            text = tail
+    return text[:1].upper() + text[1:] if text.islower() else text
+
+
+def _condition(text):
+    text = clean(text).strip(' ;,.:+–—-')
+    if not re.search(r'[A-Za-z0-9]', text) or re.fullmatch(r'(?:will\s+)?(?:be\s+)?applicable', text, re.I):
+        return ''
+    return text
+
+
+def _amount_label(line, matches, mi):
+    start = matches[mi-1].end() if mi else 0
+    label = line[start:matches[mi].start()].strip(' :–—-+*/0123456789.,')
+    if mi and '+' in label:
+        label = label.rsplit('+', 1)[-1].strip()
+    return label
 
 
 def rate_rows(body, sender=None, sent_date=None):
@@ -17,18 +52,20 @@ def rate_rows(body, sender=None, sent_date=None):
         for index, line in enumerate(lines):
             matches = list(AMOUNT.finditer(line))
             for mi, match in enumerate(matches):
-                start = matches[mi-1].end() if mi else 0
-                label = line[start:match.start()].strip(' :–—-+*/0123456789.,')
-                if mi and '+' in label:
-                    label = label.rsplit('+', 1)[-1].strip()
+                label = _amount_label(line, matches, mi)
                 if not label and index:
                     label = lines[index-1].strip(' :–—-')
                 if not label or re.search(r'\b(?:total|invoice value|exchange|ex-rate|CIF value)\b', label, re.I):
                     continue
-                if not re.search(r'\b(?:freight|EXW|transportation|delivery|door|fee|charges?|THC|PHC|DDO|seal|inspection|clearance|premium|EEC|yard)\b', label, re.I):
+                if not re.search(CHARGE_WORDS, label, re.I):
                     continue
                 end = matches[mi+1].start() if mi+1 < len(matches) else len(line)
                 detail = line[match.end():end].strip()
+                if mi+1 < len(matches):
+                    # Text before the next amount names that next charge.
+                    next_label = _amount_label(line, matches, mi+1)
+                    if next_label and detail.endswith(next_label):
+                        detail = detail[:-len(next_label)].strip()
                 # Rate basis and conditional wording remain attached to this
                 # quote, not silently turned into an unconditional total.
                 basis = re.match(r'^/\s*(TEU|20GP|20FT|UNIT|hours?|documents?|containers?|cntr)\b', detail, re.I)
@@ -36,12 +73,15 @@ def rate_rows(body, sender=None, sent_date=None):
                 if uom:
                     uom = {'hours': 'hour', 'documents': 'document', 'containers': 'container', 'cntr': 'container'}.get(uom.lower(), uom)
                 condition = re.sub(r'^/\s*' + re.escape(basis[1]), '', detail, count=1, flags=re.I).strip() if basis else detail
+                condition = _condition(condition)
                 conditional = bool(re.search(r'\b(?:if|subject|waiting|storage|inspection|approx)\b', line + ' ' + label, re.I))
+                label = _label(label)
                 attrs = [{'label': 'Rate basis', 'value': uom}] if uom else []
                 if condition:
-                    attrs.append({'label': 'Condition / inclusions', 'value': condition})
+                    attrs.append({'label': 'Condition / inclusions' if len(condition) <= MAX_CONDITION else 'Remarks',
+                                  'value': condition})
                 if conditional:
-                    attrs.append({'label': 'Applicability', 'value': line})
+                    attrs.append({'label': 'Applicability', 'value': 'Conditional'})
                 if re.search(r'\bservice (?:charge|fee)\b', label, re.I) and (re.search(r'inspection', line, re.I) or (index and re.search(r'inspection', lines[index-1], re.I))):
                     label = 'Inspection service fee'
                     conditional = True
@@ -63,6 +103,9 @@ def restore_rates(result, body, sender=None, sent_date=None):
     if not recovered:
         return result
     existing = list(result.get('items') or [])
+    def amount(value):
+        value = number(value)
+        return Decimal(value) if value is not None else None
     def tokens(value):
         value = re.sub(r'\([^)]*\)', '', clean(value).lower()).split('|')[0]
         if re.search(r'\bservice (?:charge|fee)\b', value):
@@ -71,7 +114,8 @@ def restore_rates(result, body, sender=None, sent_date=None):
     for row in recovered:
         matches = []
         for old in existing:
-            if number(old.get('unit_price')) != row['unit_price'] or old.get('currency') != row['currency']:
+            # Compare numerically: "100" and "100.00" are the same rate.
+            if amount(old.get('unit_price')) != amount(row['unit_price']) or old.get('currency') != row['currency']:
                 continue
             if str(old.get('purchase_date') or result.get('document_date') or '')[:10] != row['purchase_date']:
                 continue

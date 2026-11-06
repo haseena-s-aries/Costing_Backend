@@ -19,8 +19,9 @@ import unicodedata
 from decimal import Decimal
 
 from .msg_commercial_history import (
-    AMOUNT, clean, number, currency, split_thread, is_enquiry, plausible_company,
+    AMOUNT, AMOUNT_AFTER, clean, number, currency, split_thread, is_enquiry, plausible_company,
 )
+from .price_calculation import calculation
 
 # A priced line is a freight *service* (not a surcharge or fee) when its
 # label names the movement itself.
@@ -44,6 +45,12 @@ FIELDS = {
 LABELS = {'origin': 'POL', 'destination': 'POD', 'container': 'Container size',
           'transit': 'Transit time', 'carrier': 'Carrier'}
 SMALL_WORDS = {'to', 'of', 'and', 'at', 'by', 'for', 'in', 'on', 'the', 'via'}
+# A buyer's message accepting an offer: its prices are the supplier's
+# agreed rate, and the supplier is the other party in the thread.
+CONFIRMATION = re.compile(
+    r"\b(?:(?:your|offer|quote|quotation|rate|price)s?\b[^.\n]{0,100}\b(?:is|are)\s+(?:hereby\s+)?confirmed"
+    r"|job\s+confirmation|we\s+(?:hereby\s+)?confirm\s+(?:your|the)\s+(?:offer|quote|quotation|rate))\b", re.I)
+BUSINESS = r"(?:Logistics|Shipping|Freight|Forwarding|Marine|Lines?|Cargo|Trading|Services|Transport)"
 SUFFIX = r"(?:L\.?L\.?C\.?|LLC|PTE\.?\s+LTD\.?|CO\.?,?\s*LTD\.?|LTD\.?|LIMITED|INC\.?|FZE|FZCO|FZ-LLC)"
 
 
@@ -112,6 +119,50 @@ def _supplier(block, companies):
     return next(iter(names)) if len(names) == 1 else None
 
 
+def _signature_company(stem, blocks):
+    """Company name printed in the stem owner's own messages that starts
+    with the domain stem, e.g. "Example Marine Logistics" for example.com."""
+    names = set()
+    for block in blocks:
+        if _sender_domain(block) != stem:
+            continue
+        for match in re.finditer(rf"\b{re.escape(stem)}((?:\s+[A-Z][\w&.-]*){{0,4}}\s+{BUSINESS})\b",
+                                 block['body'], re.I):
+            if match[0][:1].isupper():
+                names.add(clean(match[0]))
+    return next(iter(names)) if len(names) == 1 else None
+
+
+def _counterparty(block, blocks, companies):
+    """Supplier for a buyer's confirmation: the single other party."""
+    own = _sender_domain(block)
+    others = {_sender_domain(b) for b in blocks if b is not block} - {own, None}
+    if not own or len(others) != 1:
+        return None
+    stem = others.pop()
+    names = companies.get(re.sub(r"[^a-z]", "", stem), set())
+    if len(names) == 1:
+        return next(iter(names))
+    return _signature_company(stem, blocks)
+
+
+def _price(line):
+    """(label, unit_price, currency, quantity, uom, line_total) of a priced
+    line. A printed unit x qty = total calculation is one item."""
+    calc = calculation(line)
+    first = min((m for m in (AMOUNT.search(line), AMOUNT_AFTER.search(line)) if m),
+                key=lambda m: m.start(), default=None)
+    if calc and first:
+        code = first['currency']
+        return (line[:first.start()], calc['unit_price'], currency(code), calc['quantity'],
+                calc['uom'], calc['line_total'], line[first.end():])
+    matches = list(AMOUNT.finditer(line))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    return line[:match.start()], number(match['amount']), currency(match['currency']), None, None, None, line[match.end():]
+
+
 def _sections(lines):
     """Split a message into quotation sections at "Option N" headings.
     Lines before the first heading are context shared by every section."""
@@ -145,27 +196,27 @@ def freight_offer_rows(body, sender=None, sent_date=None):
         lines = _commercial_lines(block)
         shared, sections = _sections(lines)
         shared_fields = _field_values(shared) if sections and sections[0]['lines'] is not shared else {}
-        supplier = _supplier(block, companies)
+        supplier = (_counterparty(block, blocks, companies) if CONFIRMATION.search(block['text'])
+                    else _supplier(block, companies))
         for section in sections:
             fields = {**shared_fields, **_field_values(section['lines'])}
             for index, line in enumerate(section['lines']):
-                matches = list(AMOUNT.finditer(line))
-                if len(matches) != 1:
+                price = _price(line)
+                if not price:
                     continue
-                match = matches[0]
-                label = line[:match.start()].strip(' :–—-+*/')
+                label, unit_price, code, quantity, uom, line_total, remainder = price
+                label = re.sub(r"\(\s+", "(", label).strip(' :–—-+*/')
                 if not label or not SERVICE.search(label) or NOT_SERVICE.search(label):
                     continue
                 if not supplier:
                     continue
-                remainder = line[match.end():]
-                size = _size(remainder) or _size(fields.get('container'))
+                size = _size(remainder) or _size(fields.get('container')) or _size(label)
                 parts = [_title(label)]
                 if fields.get('origin') and fields.get('destination'):
                     parts.append(f"{_title(fields['origin'])} to {_title(fields['destination'])}")
-                if size:
+                if size and size not in re.sub(r"\s+", "", label).upper().replace("'", 'FT'):
                     parts.append(size)
-                elif section['option']:
+                elif not size and section['option']:
                     parts.append(f"Option {section['option']}")
                 name = ' - '.join(parts)
                 attrs = [{'label': LABELS[key], 'value': fields[key]}
@@ -176,8 +227,8 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                     attrs.append({'label': 'Quotation option', 'value': f"Option {section['option']}"})
                 rows.append({
                     'row_type': 'SERVICE', 'product_name': name, 'display_name': name,
-                    'quantity': None, 'uom': size, 'unit_price': number(match['amount']),
-                    'line_total': None, 'currency': currency(match['currency']),
+                    'quantity': quantity, 'uom': uom or size, 'unit_price': unit_price,
+                    'line_total': line_total, 'currency': code,
                     'purchase_date': block['date'], 'quotation_date': block['date'],
                     'supplier_name': supplier, 'page_number': None, 'extra_attributes': attrs,
                     'source_block_id': block['id'],
@@ -212,7 +263,7 @@ def restore_freight_offers(result, body, sender=None, sent_date=None):
             kept.append(item)
             continue
         duplicate = any(
-            amount(item.get('unit_price')) == amount(row['unit_price'])
+            amount(item.get('unit_price')) in {amount(row['unit_price']), amount(row['line_total'])}
             and (item.get('currency') or row['currency']) == row['currency']
             and (date == row['purchase_date'] or date not in quote_dates)
             for row in recovered)
@@ -243,3 +294,34 @@ def pdf_thread_text(file_bytes):
     if len(re.findall(r'(?im)^From\s*:', text)) < 2 or not re.search(r'(?im)^(?:Sent|Date)\s*:', text):
         return None
     return unicodedata.normalize('NFKC', text)
+
+
+def collapse_calculated_totals(result):
+    """Drop a row that only repeats another row's printed total (same date
+    and currency), e.g. "... x 4 Nos =" or "Net amount confirmed is" next to
+    the unit-price row of that calculation. Email-thread documents only."""
+    items = list(result.get('items') or [])
+
+    def amount(value):
+        value = number(value)
+        return Decimal(value) if value is not None else None
+
+    def key(item):
+        return str(item.get('purchase_date') or '')[:10], item.get('currency')
+
+    totals = {}
+    for item in items:
+        unit, qty = amount(item.get('unit_price')), amount(item.get('quantity'))
+        total = amount(item.get('line_total')) or (unit * qty if unit and qty and qty > 1 else None)
+        if unit and total and total != unit:
+            totals.setdefault(key(item), {})[total] = item
+    kept = []
+    for item in items:
+        owner = totals.get(key(item), {}).get(amount(item.get('unit_price')))
+        if owner is not None and owner is not item and not amount(item.get('quantity') or 0) > 1:
+            owner['line_total'] = owner.get('line_total') or str(amount(item.get('unit_price')))
+            continue
+        kept.append(item)
+    if len(kept) != len(items):
+        result = dict(result, items=kept)
+    return result

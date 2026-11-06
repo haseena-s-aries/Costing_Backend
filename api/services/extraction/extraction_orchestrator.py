@@ -110,7 +110,8 @@ class ExtractionOrchestrator:
             from api.services.freight_quote_sections import restore_freight_offers, pdf_thread_text
             thread_text = pdf_thread_text(bytes(raw))
             if thread_text:
-                result = restore_freight_offers(result, thread_text)
+                from api.services.freight_quote_sections import collapse_calculated_totals
+                result = collapse_calculated_totals(restore_freight_offers(result, thread_text))
             if not result.get('_authoritative_supplier_matrix'):
                 from api.services.pdf_catalog_rates import recover_catalog_rates
                 result = recover_catalog_rates(result, bytes(raw))

@@ -5049,6 +5049,21 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                 line_total = amount
             if re.search(r"\bfuel\s+price\s+adjustment\b", name, re.I):
                 continue
+            # "Net amount confirmed is : USD X" restates a total; it is not
+            # a separate priced item.
+            if re.search(r"^net\s+(?:amount|total|value)\b|\b(?:amount|total|value)\s+(?:is\s+)?confirmed\b",
+                         name, re.I):
+                continue
+            # "8950 USD / Per Container = 8950 USD x 4 Nos = USD 35,800" is
+            # one item: the matched amount is its total, not its unit price.
+            from api.services.price_calculation import calculation, CUR, NUM
+            calc = calculation(line)
+            if calc:
+                first = re.search(rf"(?:{CUR})\s*(?:{NUM})|(?:{NUM})\s*(?:{CUR})", line, re.I)
+                if first:
+                    name = re.sub(r"\(\s+", "(", line[:first.start()]).strip(" -:")
+                amount, quantity, uom, line_total = (calc["unit_price"], calc["quantity"],
+                                                     calc["uom"], calc["line_total"])
             items.append({
                 "row_type": (
                     "CHARGE" if re.search(r"\b(?:certificate|certification|fee|charge|freight|delivery|transport|tax|vat)\b", name, re.I)
@@ -12096,6 +12111,8 @@ Rules:
             result = restore_rates(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
             from api.services.freight_quote_sections import restore_freight_offers
             result = restore_freight_offers(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
+            from api.services.freight_quote_sections import collapse_calculated_totals
+            result = collapse_calculated_totals(result)
             from api.services.word_description_evidence import restore_descriptions
             result = restore_descriptions(result, msg_meta.get('source_word_texts') or [])
             for item in result.get('items') or []:

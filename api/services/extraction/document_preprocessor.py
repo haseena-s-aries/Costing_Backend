@@ -71,7 +71,10 @@ class DocumentPreprocessor:
                     values = [cell.value for cell in values]
                 else:
                     number_formats = []
-                values = ["" if value is None else str(value).strip() for value in values]
+                # Formula results such as 30 * 3.09 are stored as binary
+                # floats (92.69999999999999); keep the value Excel displays.
+                values = ["" if value is None else str(round(value, 10) if isinstance(value, float) else value).strip()
+                          for value in values]
                 # Some workbooks carry formatting across thousands of empty
                 # columns. Keeping those cells makes every later row/column
                 # pass unnecessarily large and can cause the tail of a valid

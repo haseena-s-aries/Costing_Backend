@@ -15,6 +15,10 @@ def normalize_header(value):
     value = str(value or "").lower().replace("_", " ")
     # Currency decorations belong to commercial headers, not their identity.
     value = re.sub(r"\s*\([a-z]{3}\)\s*$", "", value) if re.search(r"\b(price|rate|amount|total|value)\b", value) else value
+    # So are short unit / currency-per-unit decorations such as "(M)",
+    # "(PCS)" or "(USD/M)" on quantity, unit and price headers.
+    if re.search(r"\b(qty|quantity|unit|uom|price|rate|amount|total|value)\b", value):
+        value = re.sub(r"\s*\(\s*[a-z]{1,5}(?:\s*/\s*[a-z0-9]{1,5})?\s*\)\s*$", "", value)
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value)).strip()
 
 def aliases_for(field, profile=None):

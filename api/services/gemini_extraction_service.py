@@ -12094,6 +12094,8 @@ Rules:
                                                       msg_meta.get('sender'), msg_meta.get('sent_date'))
             from api.services.email_rate_evidence import restore_rates
             result = restore_rates(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
+            from api.services.freight_quote_sections import restore_freight_offers
+            result = restore_freight_offers(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
             from api.services.word_description_evidence import restore_descriptions
             result = restore_descriptions(result, msg_meta.get('source_word_texts') or [])
             for item in result.get('items') or []:

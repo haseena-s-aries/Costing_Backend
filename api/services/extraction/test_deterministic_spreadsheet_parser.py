@@ -254,3 +254,17 @@ class DeterministicSpreadsheetParserTests(SimpleTestCase):
         document = {"file_type": "spreadsheet", "rows": rows}
         result = DeterministicSpreadsheetParser().extract(document, StructureDetector().detect(document))
         self.assertEqual({item["supplier_name"] for item in result["items"]}, {"CVM", "GOWIN MARINE"})
+
+    def test_unit_decorated_headers_map_quantity_and_unit_price(self):
+        rows = [
+            {"sheet": "S", "row_number": 1, "values": ["Subject:", "RFQ cables", "", "", "Date:", "22 Sept 2026"]},
+            {"sheet": "S", "row_number": 2, "values": ["No.", "Description", "Size", "Quantity\n(M)",
+                                                       "Unit Price\n(USD/M)", "Amount\n(USD)"]},
+            {"sheet": "S", "row_number": 3, "values": ["1.0", "SIGNAL", "11x0.5", "20.0", "3.7", "74.0"]},
+            {"sheet": "S", "row_number": 4, "values": ["2.0", "POWER", "3x4", "30.0", "3.09", "92.7"]},
+        ]
+        structure = StructureDetector().detect({"file_type": "spreadsheet", "rows": rows})
+        structure.structure = StructureDetector.STANDARD_TABLE
+        result = DeterministicSpreadsheetParser().extract({"file_type": "spreadsheet", "rows": rows}, structure)
+        self.assertEqual([(i["quantity"], i["uom"], i["unit_price"], i["line_total"]) for i in result["items"]],
+                         [("20.0", "M", "3.7", "74.0"), ("30.0", "M", "3.09", "92.7")])

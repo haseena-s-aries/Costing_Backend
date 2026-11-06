@@ -49,6 +49,22 @@ class CurrencyEvidenceTests(SimpleTestCase):
         result['items'].append(dict(product_name='Other', currency_evidence='USD', unit_price='20'))
         self.assertEqual([i['currency'] for i in require_image_currency_evidence(result)['items']], ['EUR', 'USD'])
 
+    def test_written_currency_name_is_evidence(self):
+        from api.services.gemini_extraction_service import _valid_currency
+        self.assertEqual(_valid_currency('euro'), 'EUR')
+        self.assertEqual(_valid_currency('380euro/pcs'), 'EUR')
+        self.assertEqual(_valid_currency('US$ 5'), 'USD')
+        # Ambiguous or company text never becomes a currency.
+        for text in ('BD SENSORS', 'Rs 50 per kg', 'USD and EUR', 'EUROPE', 'pcs'):
+            self.assertIsNone(_valid_currency(text))
+        result = {'currency': 'EUR', 'currency_evidence': None, 'items': [
+            dict(product_name='Pressure transmitter A', unit_price='380', currency_evidence='euro'),
+            dict(product_name='Pressure transmitter B', unit_price='350',
+                 source_context='Pressure transmitter B: 350euro/pcs')]}
+        result = require_image_currency_evidence(result)
+        self.assertEqual(result['currency'], 'EUR')
+        self.assertEqual([i['currency'] for i in result['items']], ['EUR', 'EUR'])
+
     def test_parser_does_not_fill_missing_currency_with_aed(self):
         rows = [['product_name', 'currency'], ['Breaker', '']]
         ParserService()._apply_document_currency(rows, [{}, {}], {})

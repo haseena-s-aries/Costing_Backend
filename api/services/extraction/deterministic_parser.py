@@ -76,6 +76,7 @@ class DeterministicSpreadsheetParser:
         serial_column = next((i for i, value in enumerate(rows[header_index]["values"])
                               if normalize_header(value) in {"no", "sl no", "s no", "serial no", "item no"}), None)
         numbered_parents = {}
+        header_uom = None if supplier_columns else self._header_unit(rows[header_index]["values"], columns)
         for row in rows[header_index + 1:]:
             values = row["values"]
             if current_sheet is not None and row.get("sheet") != current_sheet:
@@ -134,7 +135,7 @@ class DeterministicSpreadsheetParser:
             metadata = self._header_metadata(rows, header_index)
             base = {"row_type": "PRODUCT", "product_name": product,
                     "parent_category": current_parent_category,
-                    "quantity": self._value(values, columns["quantity"]), "uom": self._value(values, columns["uom"]),
+                    "quantity": self._value(values, columns["quantity"]), "uom": self._value(values, columns["uom"]) or header_uom,
                     "currency": metadata["currency"], "supplier_name": metadata["supplier_name"],
                     "source_reference": f"{row['sheet']} row {row['row_number']}"}
             header_labels = list(rows[header_index - 1]["values"]) if grouped and header_index > 0 else list(rows[header_index]["values"])
@@ -856,6 +857,18 @@ class DeterministicSpreadsheetParser:
             result.append((supplier, price_col, total_col))
             seen.update({price_col, total_col})
         return result
+
+    @staticmethod
+    def _header_unit(header_values, columns):
+        """UoM printed on the quantity header, e.g. "Quantity (M)", when
+        the table has no separate UoM column."""
+        if columns.get("uom") is not None or columns.get("quantity") is None:
+            return None
+        header = str(header_values[columns["quantity"]] if columns["quantity"] < len(header_values) else "")
+        match = re.search(r"\(\s*([A-Za-z]{1,5})\s*\)\s*$", header)
+        if not match or re.fullmatch(r"(?i)USD|EUR|AED|SGD|GBP|CNY|RMB|INR|SAR|QAR|JPY|AUD|CAD|KWD|OMR|BHD", match[1]):
+            return None
+        return match[1].upper()
 
     @staticmethod
     def _value(values, index):

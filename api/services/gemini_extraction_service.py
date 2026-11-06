@@ -84,7 +84,8 @@ SCHEMA_FIELD_PROMPT = """
 Return document fields:
 document_type, category, supplier_name, document_date, currency, subtotal, grand_total, visible_priced_row_count.
 Return currency_evidence at document and item level: the exact visible currency
-code/name/symbol (e.g. AED or Dhs). If absent, return null currency and null
+code/name/symbol (e.g. AED, Dhs, € or a written name such as "euro" in
+"380euro/pcs"). If absent, return null currency and null
 currency_evidence. Never infer currency from supplier, country, tax, language,
 amount formatting or application defaults. Keep all priced rows for Review.
 Return contains_handwriting: true when commercial descriptions, dates, quantities
@@ -578,6 +579,8 @@ def _valid_currency(value):
 
         # EUR
         "€": "EUR",
+        "EURO": "EUR",
+        "EUROS": "EUR",
 
         # GBP
         "£": "GBP",
@@ -664,7 +667,22 @@ def _valid_currency(value):
     if text in supported_codes:
         return "CNY" if text == "RMB" else text
 
-    return None
+    # Evidence copied with its amount or unit, e.g. "380euro/pcs" or
+    # "EUR 350". Accept only full codes/names and unambiguous symbols, and
+    # only when they name exactly one currency; short abbreviations such as
+    # RS/BD/SR are never matched inside longer text.
+    found = set()
+    for token in re.findall(r"[A-Z]+", text):
+        if token in supported_codes:
+            found.add("CNY" if token == "RMB" else token)
+        elif token in {"EURO", "EUROS", "DIRHAM", "DIRHAMS", "RUPEE", "RUPEES"}:
+            found.add(symbol_map[token])
+    # Longest symbols first so "US$" is not also read as "S$".
+    for symbol in ("AU$", "CA$", "US$", "JP¥", "CN¥", "S$", "A$", "C$", "€", "£", "₹", "元"):
+        if symbol in text:
+            found.add(symbol_map[symbol])
+            text = text.replace(symbol, " ")
+    return found.pop() if len(found) == 1 else None
 def _safe_business_date(parsed):
     if not parsed:
         return None

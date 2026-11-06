@@ -86,9 +86,17 @@ def plausible_company(value):
 def signature_company(body):
     lines = [clean(line) for line in body.splitlines() if clean(line)]
     # Only signatures count: ignore brands, links, addresses and request cargo.
+    # Abbreviated sign-offs ("Tks&B.rgds!", "B.Rgds", "Rgds") are sign-offs too.
     signature_start = next((i for i, line in enumerate(lines) if re.fullmatch(
-        r"(?:kind |best |warm |thanks\s*(?:&|and)\s*)?regards[,!.]?|(?:yours )?sincerely[,!.]?", line, re.I)), None)
+        r"(?:(?:thanks|tks|thx|many\s+thanks)\s*(?:&|and)\s*)?(?:(?:kind|best|warm|b)[\s.]*)?(?:regards|rgds)[,!.]*"
+        r"|(?:yours )?sincerely[,!.]?", line, re.I)), None)
     signature = lines[signature_start + 1:] if signature_start is not None else lines
+    # A signature ends at the next quoted message header; a company printed
+    # in the following (quoted) email is not this author's company.
+    if signature_start is not None:
+        end = next((i for i, line in enumerate(signature)
+                    if re.match(r"^(?:From|Sent|Date|To)\s*:", line, re.I)), len(signature))
+        signature = signature[:end]
     for line in signature:
         if not plausible_company(line):
             continue

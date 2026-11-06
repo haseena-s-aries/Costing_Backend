@@ -39,6 +39,28 @@ class EmailRateEvidenceTests(SimpleTestCase):
         self.assertEqual(result['items'][0]['uom'], '20GP')
         self.assertIsNone(result['grand_total'])
 
+    def test_sentence_labels_are_short_and_repeated_fees_collapse(self):
+        body = ('Sea freight quotation\nDOOR TO DOOR : USD 900/20GP INCLUDING DROP OFF\n'
+                '* SUBJECT TO EEC AT POD - USD 200/UNIT\n'
+                '* Subject to DTT charges USD1300/container Approx. for port moves via inland depot due to the '
+                'ongoing operational constraint affecting laden containers. (subject to occur)\n'
+                'INSPECTION\nAED 170.00/document +Service charge AED 100.00 if any\n'
+                '* For Transportation, we can provide a free time of 4 Hours then after waiting charge AED 50/hour will applicable\n'
+                '* If customs impose inspection, inspection charge will billed as per actual with service fee AED 100.\n'
+                'Regards\nSeller Freight LLC')
+        result = restore_rates({'items': []}, body, sent_date='2026-10-29')
+        rows = {r['product_name']: r for r in result['items']}
+        self.assertEqual(set(rows), {'DOOR TO DOOR', 'EEC AT POD', 'DTT charges', 'INSPECTION',
+                                     'Inspection service fee', 'Waiting charge'})
+        self.assertEqual({r['purchase_date'] for r in rows.values()}, {'2026-10-29'})
+        self.assertEqual({r['supplier_name'] for r in rows.values()}, {'Seller Freight LLC'})
+        self.assertEqual(rows['Waiting charge']['uom'], 'hour')
+        self.assertNotIn('Service charge', str(rows['INSPECTION']['extra_attributes']))
+        # Long source conditions are retained, but not in the display identity.
+        self.assertIn('subject to occur', str(rows['DTT charges']['extra_attributes']))
+        self.assertTrue(all(len(r['display_name']) < 80 for r in rows.values()))
+        self.assertTrue(all(r['is_conditional'] for n, r in rows.items() if n != 'DOOR TO DOOR'))
+
     def test_unsuffixed_signature_does_not_use_recipient(self):
         self.assertEqual(signature_company('To: Buyer LLC\nThank you\nExample Blue Services\n'
                                           'info@exampleblue.ae'), 'Example Blue Services')

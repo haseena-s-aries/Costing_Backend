@@ -140,3 +140,28 @@ class EmailRateEvidenceTests(SimpleTestCase):
         result = orchestrator.extract(SimpleUploadedFile(path.name, path.read_bytes()), path.name)
         self.assertEqual(len(result['items']), 14)
         self.assertEqual({r['supplier_name'] for r in result['items']}, {'World Zone Group'})
+
+
+class InlineItemNameAndSignatureTests(SimpleTestCase):
+    BODY = ("Dear Sirs,\nPls find below offer with lead time :3-4 days\n"
+            "*BRAND- 6316/C3VL0241 (Insulated) x 2 qty - 355.00/pc\n"
+            "*BRAND - 7219BDB (Insulated) x 2 qty offer:BRAND 7219BECBM - USD 230.00/pc\n"
+            "Tks&B.rgds!\nSeller Person\nExample Harbor Marine CO;LTD\n"
+            "From: Buyer Person <buyer@buyer.example>\nDate: 2026-10-17 18:26\n"
+            "Thank you for your offer!\nKind Regards\nFrom Buyer Group, UAE\n")
+
+    def test_inline_item_line_keeps_its_own_name(self):
+        from api.services.gemini_extraction_service import _recover_msg_product_name
+        self.assertEqual(_recover_msg_product_name('BRAND 6316/C3VL0241 (Insulated)', self.BODY, unit_price='355'),
+                         'BRAND 6316/C3VL0241 (Insulated)')
+        self.assertEqual(_recover_msg_product_name('BRAND 7219BECBM', self.BODY, unit_price='230'),
+                         'BRAND 7219BECBM')
+
+    def test_request_table_code_line_still_borrows_description(self):
+        from api.services.gemini_extraction_service import _recover_msg_product_name
+        body = 'Please quote\nDeep groove ball bearing insulated\n6316/C3VL0241\nQty 2'
+        self.assertEqual(_recover_msg_product_name('6316/C3VL0241', body),
+                         'Deep groove ball bearing insulated | 6316/C3VL0241')
+
+    def test_abbreviated_signoff_and_signature_stops_at_quoted_header(self):
+        self.assertEqual(signature_company(self.BODY), 'Example Harbor Marine CO;LTD')

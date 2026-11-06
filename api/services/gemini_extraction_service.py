@@ -6976,6 +6976,16 @@ def _recover_msg_product_name(
         if not matched_identifier:
             continue
 
+        # An inline item line ("SKF- 6316/C3 (Insulated) x 2 qty - 355/pc")
+        # already carries its own description. Only a code-only line (a
+        # request-table model cell) may borrow the description above it.
+        remainder = re.sub(rf"(?<![A-Za-z0-9]){re.escape(matched_identifier)}(?![A-Za-z0-9])", " ", line_lower)
+        remainder = re.sub(
+            r"\b(?:x|qty|quantity|nos?|pcs?|pc|ea|sets?|units?|usd|aed|eur|gbp|cny|rmb|sgd|inr|price|unit|each)\b|[\d.,/()*:–—-]+",
+            " ", remainder)
+        if re.search(r"[a-z]{3,}", remainder):
+            continue
+
         # Request tables commonly have:
         #
         # Product Name
@@ -6997,7 +7007,10 @@ def _recover_msg_product_name(
             if not previous:
                 continue
 
-            if re.match(r'^(dear|hello|hi|please|kindly|good morning|good day)\b', previous, re.I):
+            if re.match(r'^(dear|hello|hi|please|pls|plz|kindly|good morning|good day|thank|thanks|find)\b', previous, re.I):
+                continue
+            # Another item's priced/quantity line is not this item's name.
+            if re.search(r"\bx\s*\d+\s*(?:qty|nos?|pcs?)\b|\d\s*/\s*(?:pc|pcs|ea|set)\b|\b(?:USD|AED|EUR|GBP|CNY)\s*\d", previous, re.I):
                 continue
 
             if re.match(

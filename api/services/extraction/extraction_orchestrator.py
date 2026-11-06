@@ -107,14 +107,19 @@ class ExtractionOrchestrator:
             from api.services.pdf_email_quotes import recover_pdf_email_quotes
             from api.services.gemini_extraction_service import build_canonical_display_name
             result = recover_pdf_email_quotes(result, bytes(raw))
+            from api.services.freight_quote_sections import restore_freight_offers, pdf_thread_text
+            thread_text = pdf_thread_text(bytes(raw))
+            if thread_text:
+                result = restore_freight_offers(result, thread_text)
             if not result.get('_authoritative_supplier_matrix'):
                 from api.services.pdf_catalog_rates import recover_catalog_rates
                 result = recover_catalog_rates(result, bytes(raw))
             from api.services.pdf_date_evidence import reject_reference_dates
             result = reject_reference_dates(result, bytes(raw))
-            if result.get('_source_email_quote_count'):
+            if result.get('_source_email_quote_count') or result.get('_freight_section_count'):
                 for item in result.get('items') or []:
                     item['display_name'] = build_canonical_display_name(item)
+            if result.get('_source_email_quote_count'):
                 logger.info('PDF_EMAIL_FINAL file=%s rows=%s source_rows=%s uncertain_suppliers=%s',
                             original_file_name, len(result.get('items') or []), result['_source_email_quote_count'],
                             sum(bool(i.get('_supplier_identity_uncertain')) for i in result.get('items') or []))

@@ -42,3 +42,17 @@ class YenCurrencyHintTests(SimpleTestCase):
         # A row with another printed currency never becomes CNY.
         mixed = {'items': [dict(product_name='B', unit_price='7', currency=None, source_context='USD 7')]}
         self.assertIsNone(resolve_yen_currency(mixed, QUOTE + 'B USD 7')['items'][0]['currency'])
+
+
+class TaxServiceRowTests(SimpleTestCase):
+    def test_fee_about_tax_is_an_item_but_tax_amounts_are_metadata(self):
+        from api.services.gemini_extraction_service import normalize_result
+        result = normalize_result({'items': [
+            {'product_name': 'Export shipment tax refund application fee', 'unit_price': '100.00'},
+            {'product_name': 'Tax filing service', 'unit_price': '50'},
+            {'product_name': 'VAT 5%', 'unit_price': '50'},
+            {'product_name': 'Sales tax', 'unit_price': '9'},
+            {'product_name': 'Pump', 'unit_price': '1000'}]})
+        self.assertEqual([i['product_name'] for i in result['items']],
+                         ['Export shipment tax refund application fee', 'Tax filing service', 'Pump'])
+        self.assertEqual([t['label'] for t in result['tax_metadata']], ['VAT 5%', 'Sales tax'])

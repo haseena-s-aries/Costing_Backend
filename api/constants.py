@@ -1,0 +1,40 @@
+SYSTEM_FIELDS = [
+    {"name": "item_code", "label": "Item Code", "required": False},
+    {"name": "part_number", "label": "Part Number", "required": False},
+    {"name": "product_name", "label": "Product Name", "required": False},
+    {"name": "category", "label": "Category", "required": False},
+    {"name": "subcategory", "label": "Subcategory", "required": False},
+    {"name": "manufacturer", "label": "Manufacturer", "required": False},
+    {"name": "brand", "label": "Brand", "required": False},
+    {"name": "supplier", "label": "Supplier", "required": False},
+    {"name": "purchase_date", "label": "Purchase Date", "required": False},
+    {"name": "quantity", "label": "Quantity", "required": False},
+    {"name": "unit_of_measurement", "label": "Unit of Measurement", "required": False},
+    {"name": "unit_price", "label": "Unit Price", "required": True},
+    {"name": "currency", "label": "Currency", "required": False},
+    {"name": "exchange_rate", "label": "Exchange Rate", "required": False},
+    {"name": "converted_base_price", "label": "Converted Base Price", "required": False},
+    {"name": "lpo_reference", "label": "LPO Reference", "required": False},
+    {"name": "grn_reference", "label": "GRN Reference", "required": False},
+    {"name": "quotation_reference", "label": "Quotation Reference", "required": False},
+    {"name": "source_reference", "label": "Source Reference", "required": False},
+    {"name": "purchase_location", "label": "Purchase Location", "required": False},
+    {"name": "specification", "label": "Specification", "required": False},
+    {"name": "material", "label": "Material", "required": False},
+    {"name": "tax", "label": "Tax", "required": False},
+    {"name": "tax_amount", "label": "Tax Amount", "required": False},
+    {"name": "line_total", "label": "Line Total", "required": False},
+    {"name": "document_number", "label": "Document Number", "required": False},
+    {"name": "document_date", "label": "Document Date", "required": False},
+    {"name": "payment_terms", "label": "Payment Terms", "required": False},
+    {"name": "delivery_terms", "label": "Delivery Terms", "required": False},
+    {"name": "grand_total", "label": "Grand Total", "required": False},
+    {"name": "row_type", "label": "Row Type", "required": False},
+    {"name": "remarks", "label": "Remarks", "required": False},
+    {"name": "ignore", "label": "Ignore", "required": False},
+]
+SYSTEM_FIELD_NAMES = {field["name"] for field in SYSTEM_FIELDS}
+REQUIRED_PRODUCT_FIELDS = {"item_code", "part_number", "product_name"}
+SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".eml", ".msg", ".txt", ".zip", ".rar"}
+MAX_UPLOAD_SIZE = 25 * 1024 * 1024
+BASE_CURRENCY = "AED"

@@ -1,0 +1,2 @@
+BASE_DIR = E:\ARIES_PROJECT\Costing_System_Backend\costingProject
+DJANGO_ALLOWED_HOSTS = 127.0.0.1

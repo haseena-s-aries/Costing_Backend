@@ -1,0 +1,54 @@
+# Node.js
+node_modules/
+**/node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build files
+build/
+dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python cache
+*.pyc
+.pytest_cache/
+
+# Test files
+golden_tests/expected
+golden_tests/inputs
+golden_tests/results
+test_fixtures

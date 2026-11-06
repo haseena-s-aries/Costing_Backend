@@ -1980,7 +1980,12 @@ def normalize_result(result):
             or item.get("description")
             or ""
         ).strip()
-        if re.search(r"\b(?:vat|gst|tax|sales\s+tax|excise\s+tax)\b", description, re.I):
+        # A fee/charge/service *about* tax ("Export shipment tax refund
+        # application fee") is a priced line item, not a tax amount.
+        if re.search(r"\b(?:vat|gst|tax|sales\s+tax|excise\s+tax)\b", description, re.I) and not re.search(
+            r"\b(?:fees?|charges?|services?|cost|refund|application|filing|registration|consult\w*|handling|processing|documentation)\b",
+            description, re.I,
+        ):
             tax_rows.append({
                 "label": description,
                 "rate": re.search(r"(\d+(?:\.\d+)?)\s*%", description).group(1)

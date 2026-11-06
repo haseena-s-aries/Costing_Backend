@@ -117,6 +117,9 @@ class ExtractionOrchestrator:
                 result = recover_catalog_rates(result, bytes(raw))
             from api.services.pdf_date_evidence import reject_reference_dates
             result = reject_reference_dates(result, bytes(raw))
+            from api.services.yen_currency_hint import resolve_yen_currency
+            from api.services.freight_quote_sections import pdf_text
+            result = resolve_yen_currency(result, pdf_text(bytes(raw)))
             if result.get('_source_email_quote_count') or result.get('_freight_section_count'):
                 for item in result.get('items') or []:
                     item['display_name'] = build_canonical_display_name(item)

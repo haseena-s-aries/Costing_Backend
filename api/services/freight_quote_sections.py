@@ -280,16 +280,23 @@ def restore_freight_offers(result, body, sender=None, sent_date=None):
     return result
 
 
+def pdf_text(file_bytes):
+    """Visible PDF text without page-number lines ('' when unreadable)."""
+    import pdfplumber
+    try:
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            return '\n'.join('\n'.join(line for line in (page.extract_text() or '').splitlines()
+                                       if not re.fullmatch(r'\s*\d+\s*', line)) for page in pdf.pages)
+    except Exception:
+        return ''
+
+
 def pdf_thread_text(file_bytes):
     """Text of a PDF that is a printed email thread, else None. Page-number
     lines are dropped so a quotation continuing on the next page stays in
     its own message."""
-    import pdfplumber
-    try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            text = '\n'.join('\n'.join(line for line in (page.extract_text() or '').splitlines()
-                                       if not re.fullmatch(r'\s*\d+\s*', line)) for page in pdf.pages)
-    except Exception:
+    text = pdf_text(file_bytes)
+    if not text:
         return None
     if len(re.findall(r'(?im)^From\s*:', text)) < 2 or not re.search(r'(?im)^(?:Sent|Date)\s*:', text):
         return None

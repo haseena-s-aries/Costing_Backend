@@ -12133,6 +12133,13 @@ Rules:
         if str(mime_type or '').startswith('image/'):
             from api.services.currency_evidence_policy import require_image_currency_evidence
             result = require_image_currency_evidence(result)
+        # A bare ¥/￥ price takes CNY/JPY only from a hint in the same file.
+        from api.services.yen_currency_hint import resolve_yen_currency
+        if is_msg:
+            result = resolve_yen_currency(result, '\n'.join(str(msg_meta.get(k) or '') for k in ('subject', 'body', 'html_body')))
+        elif mime_type == "application/pdf":
+            from api.services.freight_quote_sections import pdf_text
+            result = resolve_yen_currency(result, pdf_text(file_bytes))
         return required_metadata(result)
 
     def _normalize_multilingual_product_names(self, result, import_batch=None):

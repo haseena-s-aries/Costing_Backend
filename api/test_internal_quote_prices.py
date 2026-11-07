@@ -45,11 +45,11 @@ class InternalQuotePriceTests(SimpleTestCase):
         summary = [(r['purchase_date'], r['product_name'], r['unit_price'], r['quantity'], r['vessel']) for r in rows]
         self.assertEqual(summary, [
             # Same price re-sent for SEA STAR on 14 Oct: one row, first quoted 5 Oct.
-            ('2026-10-05', 'Transportation charge', '3450.00', None, 'SEA STAR'),
+            ('2026-10-05', 'Transportation charge - SEA STAR', '3450.00', None, 'SEA STAR'),
             # Same price, different vessel: kept separately.
-            ('2026-10-03', 'Transportation charge (direct delivery to the shipyard)', '3450.00', None, 'OCEAN MOON'),
+            ('2026-10-03', 'Transportation charge - OCEAN MOON (direct delivery to the shipyard)', '3450.00', None, 'OCEAN MOON'),
             # Quantity only where it is printed (and verified by its total).
-            ('2026-10-03', 'Packing crates', '150.00', '2', 'OCEAN MOON'),
+            ('2026-10-03', 'Packing crates - OCEAN MOON', '150.00', '2', 'OCEAN MOON'),
         ])
         self.assertEqual({r['supplier_name'] for r in rows}, {None})
         self.assertEqual({r['buyer_name'] for r in rows}, {'CLIENT SHIPMANAGEMENT PTE LTD'})
@@ -71,3 +71,15 @@ class InternalQuotePriceTests(SimpleTestCase):
         self.assertEqual(internal_quote_rows(supplier_thread), [])
         confirmation = THREAD.replace('Dear Sir,', 'Your below offer for shipment are confirmed.')
         self.assertNotIn('2026-10-14', {r['purchase_date'] for r in internal_quote_rows(confirmation)})
+
+    def test_transport_rows_are_services_and_default_domains_apply(self):
+        rows = internal_quote_rows(THREAD)
+        self.assertEqual([r['row_type'] for r in rows], ['SERVICE', 'SERVICE', 'PRODUCT'])
+
+
+class DefaultInternalDomainTests(SimpleTestCase):
+    @override_settings(INTERNAL_COMPANY_DOMAINS=None)
+    def test_missing_setting_falls_back_to_built_in_domains(self):
+        from api.services.internal_quote_prices import _internal
+        self.assertTrue(_internal('arteqworld.com'))
+        self.assertFalse(_internal('nykgroup.com'))

@@ -28,6 +28,7 @@ from .msg_commercial_history import (
 )
 from .freight_quote_sections import CONFIRMATION, _commercial_lines
 from .price_calculation import calculation
+from .commercial_consistency import TRANSPORT
 
 TOTAL = re.compile(r"\b(?:total|sub\s*total|grand\s+total|invoice\s+value|order\s+value|cargo\s+value|"
                    r"CIF\s+value|insured\s+value|exchange\s+rate|budget)\b", re.I)
@@ -36,6 +37,8 @@ FILLER_START = re.compile(r"^(?:(?:kindly|please|pls)\s+note\s+(?:that\s+)?|note
 FILLER_END = re.compile(r"\s*(?:\bis\b|\bare\b|\bwill\s+be\b|\bwould\s+be\b|\bshall\s+be\b|\bcomes?\s+to\b|"
                         r"\bamounts?\s+to\b|\bat\b|\bof\b|[=:–—-])\s*$", re.I)
 DETAIL = re.compile(r"\s+(?:using|with|for|via)\s+|,\s*", re.I)
+# A priced email line naming a movement of goods is a service.
+MOVEMENT = re.compile(r"\b(?:transport\w*|shipping|shipment|freight|delivery|courier|logistics|trucking|haulage)\b", re.I)
 CHARGE = re.compile(r"\b(?:charges?|fees?|costs?|transport\w*|freight|delivery|services?|hire|rental|handling)\b", re.I)
 
 
@@ -43,8 +46,13 @@ def _domains(text):
     return {d.lower() for d in re.findall(r"[\w.+-]+@([\w-]+(?:\.[\w-]+)+)", str(text or ''))}
 
 
+# Used when settings.INTERNAL_COMPANY_DOMAINS is not configured.
+DEFAULT_INTERNAL_DOMAINS = ('arteqworld.com', 'ariesmar.com', 'ariesgroupglobal.com', 'ariesenergyglobal.com',
+                            'ariesenergygroup.com', 'ariesofs.ae', 'aries-network.com')
+
+
 def _internal(domain):
-    internal = getattr(settings, 'INTERNAL_COMPANY_DOMAINS', []) or []
+    internal = getattr(settings, 'INTERNAL_COMPANY_DOMAINS', None) or DEFAULT_INTERNAL_DOMAINS
     return bool(domain) and any(domain == d or domain.endswith('.' + d) for d in internal)
 
 
@@ -95,7 +103,7 @@ def _customer(block, blocks):
     return None
 
 
-def _description(label):
+def _description(label, vessel=None):
     text = re.sub(r"\s*\bx\s*\d+(?:\.\d+)?\s*(?:nos?|pcs?|units?|sets?)?\.?\s*$", "", clean(label), flags=re.I)
     previous = None
     while previous != text:
@@ -106,6 +114,9 @@ def _description(label):
     main = parts[0].strip(' ,')
     detail = parts[1].strip(' ,') if len(parts) > 1 else ''
     name = main[:1].upper() + main[1:]
+    # The vessel/project identifies which shipment this price belongs to.
+    if vessel and vessel.casefold() not in text.casefold():
+        name = f"{name} - {vessel}"
     if detail and len(detail.split()) <= 6:
         name = f"{name} ({detail})"
     return name
@@ -141,7 +152,7 @@ def internal_quote_rows(body, sender=None, sent_date=None):
             label, unit_price, code, quantity, uom, line_total = priced
             if not unit_price or TOTAL.search(label) or not re.search(r"[A-Za-z]{3}", label):
                 continue
-            name = _description(label)
+            name = _description(label, vessel)
             if not name:
                 continue
             # Customer / vessel / email are metadata, not item identity.
@@ -150,7 +161,8 @@ def internal_quote_rows(body, sender=None, sent_date=None):
                 f"Email {block['date']} from {clean(block.get('sender'))}: {subject}".strip(),
             ) if part)
             rows.append({
-                'row_type': 'CHARGE' if CHARGE.search(name) else 'PRODUCT',
+                'row_type': ('SERVICE' if TRANSPORT.search(name) or MOVEMENT.search(name)
+                             else 'CHARGE' if CHARGE.search(name) else 'PRODUCT'),
                 'product_name': name, 'display_name': name,
                 'quantity': quantity, 'uom': uom, 'unit_price': unit_price, 'line_total': line_total,
                 'currency': code, 'purchase_date': block['date'], 'quotation_date': block['date'],

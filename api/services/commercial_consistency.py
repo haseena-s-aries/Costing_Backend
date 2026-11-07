@@ -44,9 +44,16 @@ def _tokens(name):
     return {w[:-1] if len(w) > 3 and w.endswith('s') else w for w in words if w not in STOP}
 
 
+# Moving goods between two named places ("Pick up of the materials from A
+# to B") is a service.
+MOVEMENT_ROUTE = re.compile(r"\b(?:pick[- ]?up|delivery|deliver|collection|shifting|transfer|haulage|trucking)\b"
+                            r".*\bfrom\s+\S.*\bto\s+\S|^\s*from\s+\S.*\bto\s+\S", re.I)
+
+
 def classify_services(items):
     for item in items:
-        if str(item.get('row_type') or 'PRODUCT').upper() == 'PRODUCT' and TRANSPORT.search(str(item.get('product_name') or '')):
+        name = str(item.get('product_name') or '')
+        if str(item.get('row_type') or 'PRODUCT').upper() == 'PRODUCT' and (TRANSPORT.search(name) or MOVEMENT_ROUTE.search(name)):
             item['row_type'] = 'SERVICE'
 
 
@@ -170,6 +177,51 @@ def single_total_service(result, items):
     return [i for i in items if i is not source] + [row]
 
 
+# Greeting / offer phrases that introduce a price but name nothing.
+FILLER = re.compile(
+    r"\b(?:dear\s+\w+|good\s+(?:day|morning|afternoon|evening)|hello|hi|greetings|"
+    r"thanks?(?:\s+you)?(?:\s+(?:very\s+much|so\s+much))?(?:\s+for\s+(?:your|the)\s+(?:kind\s+)?(?:enquiry|inquiry|request|email|mail))?|"
+    r"(?:we\s+are\s+|i\s+am\s+)?(?:pleased|happy|glad)\s+to\s+(?:offer|quote|inform|share)(?:\s+you)?|"
+    r"(?:please|kindly|pls)\s+(?:find|note|see)(?:\s+(?:below|attached|herewith|our|the))*(?:\s+(?:best\s+)?(?:price|rate|offer|quote|quotation))?|"
+    r"(?:our|the)\s+(?:best\s+)?(?:price|rate|offer|quote|quotation)(?:\s+(?:is|will\s+be|as\s+follows))?|"
+    r"as\s+(?:discussed|requested|per\s+your\s+request)|we\s+can\s+offer|we\s+offer|offer(?:ing)?)\b", re.I)
+
+
+def _is_filler(name):
+    name = str(name or '').split('|')[0]
+    # Only a name made of greeting/offer phrases is filler; part numbers and
+    # codes such as "ZB5AD2C+ZB5AZ105C" never are.
+    if not FILLER.search(name):
+        return False
+    rest = FILLER.sub(' ', name)
+    return not re.search(r"[A-Za-z]{3}", re.sub(r"\b(?:and|the|for|your|our|you|is|are|to|of|at|a|an)\b", ' ', rest, flags=re.I))
+
+
+def drop_filler_rows(items, result):
+    """A row named only by greeting/offer text is the same price line as a
+    properly named row with the same price, currency and date; drop it. A
+    lone filler row is kept and flagged for review."""
+    kept, flagged = [], False
+    for item in items:
+        if not _is_filler(item.get('product_name')):
+            kept.append(item)
+            continue
+        price = _amount(item.get('unit_price'))
+        twin = price is not None and any(
+            other is not item and not _is_filler(other.get('product_name'))
+            and _amount(other.get('unit_price')) == price
+            and (other.get('currency') or None) == (item.get('currency') or None)
+            and str(other.get('purchase_date') or '') == str(item.get('purchase_date') or '')
+            for other in items)
+        if not twin:
+            kept.append(item)
+            flagged = True
+    if flagged:
+        result['_review_reasons'] = list(dict.fromkeys([*(result.get('_review_reasons') or []), 'unnamed_price_line']))
+        result['_needs_review'] = True
+    return kept
+
+
 def finalize(result):
     items = list(result.get('items') or [])
     items = single_total_service(result, items)
@@ -177,6 +229,7 @@ def finalize(result):
         return result
     classify_services(items)
     canonical_suppliers(items, result)
+    items = drop_filler_rows(items, result)
     items = drop_restatements(items)
     items = reconcile_totals(items, result)
     result = dict(result, items=items)

@@ -45,6 +45,11 @@ def _verified_pdf_identity(source_context, fallback_name):
     )
     identity = identity_source[:price.start()] if price else identity_source
     identity = re.sub(r"\s+", " ", identity).strip(" -–—:.,")
+    # Greeting/offer text before the price ("Thanks for your enquiry,
+    # pleased to offer") names nothing; keep the row's own description.
+    from api.services.commercial_consistency import _is_filler
+    if identity and _is_filler(identity) and text(fallback_name):
+        identity = ""
     return identity or text(fallback_name), {
         re.sub(r"\s+", " ", match.group(1)).strip().casefold()
         for match in re.finditer(
@@ -254,7 +259,10 @@ def merge_recovery(existing, recovered):
             if field != "line_total" and row.get("currency") and row.get("currency") != fact.get("currency"):
                 continue
             qty = number(row.get("quantity"))
-            if qty is not None and qty != number(fact.get("quantity")):
+            # A model quantity of 1 against a source line that prints no
+            # quantity is not a conflicting quantity.
+            if qty is not None and qty != number(fact.get("quantity")) and not (
+                    qty == 1 and number(fact.get("quantity")) is None):
                 duration_values = [text(a.get("value")) for a in row.get("extra_attributes") or []
                                    if text(a.get("label")).casefold() == "duration"]
                 duration_match = any(
@@ -307,6 +315,11 @@ def merge_recovery(existing, recovered):
             if existing_type in {"PRODUCT", "CHARGE", "SERVICE"} and recovered_type == "SERVICE":
                 merged["row_type"] = existing_type
             merged.pop("_keep_duplicate_priced_row", None)
+            # The verified source line prints no quantity: a model default of
+            # 1 is not a quantity.
+            if (fact.get("_source_fact_verified") and number(fact.get("quantity")) is None
+                    and number(existing.get("quantity")) == 1):
+                merged["quantity"] = None
             output[index] = merged
             used.add(index)
         else:
@@ -370,6 +383,8 @@ def finalize_pdf(result, file_bytes, recovery_items=None):
         if len(names) == 1:
             seller = names.pop()
     recovered = _extract_pdf_email_tariff_charge_items(file_bytes, seller)
+    from api.services.gemini_extraction_service import _adopt_model_names
+    recovered = _adopt_model_names(recovered, result.get("items"))
     lines = [(page + 1, text(line)) for page, content in enumerate(pages) for line in content.splitlines() if text(line)]
     summary_pages = {n: m for n, m in totals}
     from api.services.msg_commercial_history import email_date

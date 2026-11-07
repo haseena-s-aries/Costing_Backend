@@ -18,6 +18,7 @@ Model rows for the same price are replaced. A buyer confirming a supplier's
 offer is handled by freight_quote_sections and is skipped here.
 No supplier, file or route specific rules.
 """
+import logging
 import re
 from decimal import Decimal
 
@@ -29,6 +30,8 @@ from .msg_commercial_history import (
 from .freight_quote_sections import CONFIRMATION, _commercial_lines
 from .price_calculation import calculation
 from .commercial_consistency import TRANSPORT
+
+logger = logging.getLogger(__name__)
 
 TOTAL = re.compile(r"\b(?:total|sub\s*total|grand\s+total|invoice\s+value|order\s+value|cargo\s+value|"
                    r"CIF\s+value|insured\s+value|exchange\s+rate|budget)\b", re.I)
@@ -185,6 +188,8 @@ def internal_quote_rows(body, sender=None, sent_date=None):
 
 def restore_internal_quotes(result, body, sender=None, sent_date=None):
     rows = internal_quote_rows(body, sender, sent_date)
+    logger.info('INTERNAL_QUOTE_PRICES rows=%s internal_domains=%s', len(rows),
+                ','.join(getattr(settings, 'INTERNAL_COMPANY_DOMAINS', None) or DEFAULT_INTERNAL_DOMAINS))
     if not rows:
         return result
 

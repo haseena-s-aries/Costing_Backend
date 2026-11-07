@@ -4,8 +4,10 @@ When a message in the thread is written by one of our own domains
 (settings.INTERNAL_COMPANY_DOMAINS) and quotes a price to a client, the
 price is ours, not a supplier offer:
 
-- supplier_name is null unless the actual provider is named (never the
-  email sender or recipient); the client is kept as buyer_name / Customer;
+- supplier_name is our company as signed in that message (we are the
+  seller of this quotation); the client is kept as buyer_name. Messages to
+  parties that quote prices themselves (our suppliers) are enquiries or
+  negotiations and produce no rows;
 - each price keeps the date of the message that first quoted it; the same
   price re-sent for the same vessel/project is one row, while the same price
   for a different vessel/project stays a separate row;
@@ -25,7 +27,7 @@ from decimal import Decimal
 from django.conf import settings
 
 from .msg_commercial_history import (
-    AMOUNT, AMOUNT_AFTER, clean, number, currency, split_thread, signature_company,
+    AMOUNT, AMOUNT_AFTER, clean, number, currency, split_thread, signature_company, is_enquiry,
 )
 from .freight_quote_sections import CONFIRMATION, _commercial_lines
 from .price_calculation import calculation
@@ -140,10 +142,18 @@ def _priced(line):
 
 def internal_quote_rows(body, sender=None, sent_date=None):
     blocks = split_thread(body, sender, sent_date)
+    # Parties that send priced messages themselves are suppliers; our
+    # messages to them are enquiries/negotiations, not our quotations.
+    quoting = {_sender_domain(b) for b in blocks
+               if not _internal(_sender_domain(b)) and any(_priced(l) for l in _commercial_lines(b))}
+    quoting.discard(None)
     rows = []
     for block in blocks:
         domain = _sender_domain(block)
-        if not block['date'] or not _internal(domain) or CONFIRMATION.search(block['text']):
+        if not block['date'] or not _internal(domain) or CONFIRMATION.search(block['text']) or is_enquiry(block):
+            continue
+        recipients = _domains(_header(block, 'To'))
+        if recipients & quoting:
             continue
         subject = _subject(block)
         vessel = _vessel(subject, block['body'])
@@ -169,7 +179,8 @@ def internal_quote_rows(body, sender=None, sent_date=None):
                 'product_name': name, 'display_name': name,
                 'quantity': quantity, 'uom': uom, 'unit_price': unit_price, 'line_total': line_total,
                 'currency': code, 'purchase_date': block['date'], 'quotation_date': block['date'],
-                'supplier_name': None, 'buyer_name': customer, 'page_number': None,
+                # Our own quotation: the supplier is our company as signed.
+                'supplier_name': block.get('supplier'), 'buyer_name': customer, 'page_number': None,
                 'extra_attributes': [],
                 'source_block_id': block['id'], 'source_row_id': f"{block['id']}:internal:{index}",
                 'source_reference': reference, 'source_context': line, 'vessel': vessel,

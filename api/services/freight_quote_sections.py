@@ -36,14 +36,25 @@ SIZE = re.compile(
     r"(?<![\d.])(20|40|45)\s*(?:(?P<ft>['’′]|ft\b|feet\b|foot\b)|(?P<type>GP|DV|HC|HQ|RF|RH|OT|FR|STD|DC)\b)",
     re.I)
 FIELDS = {
-    'origin': r"POL|port\s+of\s+loading|loading\s+port|origin(?:\s+port)?",
-    'destination': r"POD|port\s+of\s+discharge|discharge\s+port|destination(?:\s+port)?|place\s+of\s+delivery",
+    'origin': r"POL|AOL|port\s+of\s+loading|loading\s+port|airport\s+of\s+(?:loading|departure)|"
+              r"origin(?:\s+(?:port|airport))?",
+    'destination': r"POD|AOD|port\s+of\s+discharge|discharge\s+port|airport\s+of\s+(?:destination|discharge|arrival)|"
+                   r"destination(?:\s+(?:port|airport))?|place\s+of\s+delivery",
     'container': r"container(?:\s+(?:size|type))?|equipment",
-    'transit': r"T\s*/\s*T|transit\s+time",
+    'transit': r"T\s*/\s*T|TT|transit\s+time",
     'carrier': r"carrier|shipping\s+line",
+    'airline': r"airline",
+    'term': r"term|incoterms?",
+    'weight': r"chargeable\s+weight",
+    'route': r"route",
 }
 LABELS = {'origin': 'POL', 'destination': 'POD', 'container': 'Container size',
-          'transit': 'Transit time', 'carrier': 'Carrier'}
+          'transit': 'Transit time', 'carrier': 'Carrier', 'airline': 'Airline', 'term': 'Term',
+          'weight': 'Chargeable weight', 'route': 'Route'}
+# A service term printed in brackets right after the price, e.g.
+# "ALL IN CHARGES : AED 90800/- (DOOR TO DOOR)".
+TRAILING_SERVICE = re.compile(r"^\s*/?\s*-?\s*\((?P<term>[^)]{3,40})\)")
+MODE = re.compile(r"\b(?P<mode>AIR|SEA|ROAD|OCEAN)\s+(?:IMPORT|EXPORT|FREIGHT|SHIPMENT|ESTIMATE)\b", re.I)
 SMALL_WORDS = {'to', 'of', 'and', 'at', 'by', 'for', 'in', 'on', 'the', 'via'}
 # A buyer's message accepting an offer: its prices are the supplier's
 # agreed rate, and the supplier is the other party in the thread.
@@ -57,7 +68,8 @@ SUFFIX = r"(?:L\.?L\.?C\.?|LLC|PTE\.?\s+LTD\.?|CO\.?,?\s*LTD\.?|LTD\.?|LIMITED|I
 def _title(text):
     """Title-case ALL-CAPS source text for a readable description."""
     text = clean(text)
-    if text != text.upper():
+    # A bare location/airport code stays as printed (HKG, AUH).
+    if text != text.upper() or re.fullmatch(r"[A-Z]{3}", text):
         return text
     words = text.lower().split()
     return ' '.join(w if i and w in SMALL_WORDS else w[:1].upper() + w[1:] for i, w in enumerate(words))
@@ -107,12 +119,21 @@ def _domain_companies(text):
     return names
 
 
-def _supplier(block, companies):
+def _sender_name(block):
+    return re.sub(r"\s*<.*$", "", clean(block.get('sender'))).strip(" '\"").casefold() or None
+
+
+def _supplier(block, companies, blocks=()):
     if block.get('supplier'):
         return block['supplier']
     stem = _sender_domain(block)
     if not stem:
-        return None
+        # A forwarded/internal copy ("From: Seller Person") may omit the
+        # address; the same sender's other messages name the company.
+        name = _sender_name(block)
+        known = {b['supplier'] for b in blocks if b is not block and b.get('supplier')
+                 and name and _sender_name(b) == name}
+        return next(iter(known)) if len(known) == 1 else None
     # Only a printed company whose name spells the sender's domain stem
     # (e.g. "Example Shipping LLC" for example-shipping.com) is accepted.
     names = companies.get(re.sub(r"[^a-z]", "", stem), set())
@@ -197,21 +218,41 @@ def freight_offer_rows(body, sender=None, sent_date=None):
         shared, sections = _sections(lines)
         shared_fields = _field_values(shared) if sections and sections[0]['lines'] is not shared else {}
         supplier = (_counterparty(block, blocks, companies) if CONFIRMATION.search(block['text'])
-                    else _supplier(block, companies))
+                    else _supplier(block, companies, blocks))
         for section in sections:
-            fields = {**shared_fields, **_field_values(section['lines'])}
+            section_fields = {**shared_fields, **_field_values(section['lines'])}
+            priced_lines = [i for i, l in enumerate(section['lines']) if _price(l)]
             for index, line in enumerate(section['lines']):
                 price = _price(line)
                 if not price:
                     continue
                 label, unit_price, code, quantity, uom, line_total, remainder = price
                 label = re.sub(r"\(\s+", "(", label).strip(' :–—-+*/')
-                if not label or not SERVICE.search(label) or NOT_SERVICE.search(label):
+                trailing = TRAILING_SERVICE.match(remainder)
+                term = trailing['term'].strip() if trailing and SERVICE.search(trailing['term']) else None
+                if not label or not (SERVICE.search(label) or term) or NOT_SERVICE.search(label):
                     continue
                 if not supplier:
                     continue
+                fields = section_fields
+                if not section['option'] and len(priced_lines) > 1:
+                    # Several estimates in one message: each price uses the
+                    # labelled lines of its own estimate (before it, else after).
+                    position = priced_lines.index(index)
+                    start = priced_lines[position - 1] + 1 if position else 0
+                    end = priced_lines[position + 1] if position + 1 < len(priced_lines) else len(section['lines'])
+                    before = _field_values(section['lines'][start:index])
+                    after = _field_values(section['lines'][index + 1:end])
+                    fields = {**shared_fields, **after, **before}
                 size = _size(remainder) or _size(fields.get('container')) or _size(label)
-                parts = [_title(label)]
+                head = _title(label) + (f" ({_title(term)})" if term else '')
+                # Mode comes from the heading above the price only, never from
+                # an inclusions list printed after it.
+                mode = MODE.search('\n'.join(section['lines'][:index])) or (
+                    MODE.search('\n'.join(shared)) if section['lines'] is not shared else None)
+                if mode and not re.search(r"\bfreight\b", head, re.I):
+                    head = f"{mode['mode'].title()} Freight {head}"
+                parts = [head]
                 if fields.get('origin') and fields.get('destination'):
                     parts.append(f"{_title(fields['origin'])} to {_title(fields['destination'])}")
                 if size and size not in re.sub(r"\s+", "", label).upper().replace("'", 'FT'):
@@ -220,7 +261,8 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                     parts.append(f"Option {section['option']}")
                 name = ' - '.join(parts)
                 attrs = [{'label': LABELS[key], 'value': fields[key]}
-                         for key in ('origin', 'destination', 'transit', 'carrier') if fields.get(key)]
+                         for key in ('origin', 'destination', 'route', 'airline', 'carrier', 'term', 'weight', 'transit')
+                         if fields.get(key)]
                 if size:
                     attrs.append({'label': 'Container size', 'value': size})
                 if section['option']:
@@ -259,8 +301,16 @@ def restore_freight_offers(result, body, sender=None, sent_date=None):
         name = str(item.get('product_name') or '').split('|')[0]
         verified_other = ((item.get('_explicit_email_rate') or item.get('_source_fact_verified'))
                           and not (SERVICE.search(name) and not NOT_SERVICE.search(name)))
-        if item.get('_attachment_name') or verified_other:
+        if item.get('_attachment_name'):
             kept.append(item)
+            continue
+        if verified_other:
+            # A row read from the same priced line by another recovery step
+            # (same date, price and currency) is the same offer.
+            if not any(amount(item.get('unit_price')) == amount(row['unit_price'])
+                       and item.get('currency') == row['currency'] and date == row['purchase_date']
+                       for row in recovered):
+                kept.append(item)
             continue
         duplicate = any(
             amount(item.get('unit_price')) in {amount(row['unit_price']), amount(row['line_total'])}

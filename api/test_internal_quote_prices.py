@@ -51,7 +51,7 @@ class InternalQuotePriceTests(SimpleTestCase):
             # Quantity only where it is printed (and verified by its total).
             ('2026-10-03', 'Packing crates - OCEAN MOON', '150.00', '2', 'OCEAN MOON'),
         ])
-        self.assertEqual({r['supplier_name'] for r in rows}, {None})
+        self.assertEqual({r['supplier_name'] for r in rows}, {None})  # test thread signs without a company
         self.assertEqual({r['buyer_name'] for r in rows}, {'CLIENT SHIPMANAGEMENT PTE LTD'})
         self.assertIn('Vessel: SEA STAR; Email 2026-10-05', rows[0]['source_reference'])
         self.assertEqual(rows[0]['_source_email']['subject'], 'SEA STAR - Mooring fittings Modification - Spare Parts')
@@ -83,3 +83,20 @@ class DefaultInternalDomainTests(SimpleTestCase):
         from api.services.internal_quote_prices import _internal
         self.assertTrue(_internal('arteqworld.com'))
         self.assertFalse(_internal('nykgroup.com'))
+
+
+@override_settings(INTERNAL_COMPANY_DOMAINS=['ourco.example'])
+class InternalQuoteRoleTests(SimpleTestCase):
+    def test_our_company_is_supplier_of_our_quote(self):
+        thread = THREAD.replace('Kind Regards\nOur Person\nFrom: Our Person <sales@ourco.example>\nSent: Monday',
+                                'Kind Regards\nFrom Our Group, UAE\nOur Person\nFrom: Our Person <sales@ourco.example>\nSent: Monday')
+        rows = internal_quote_rows(thread)
+        self.assertIn('Our Group, UAE', {r['supplier_name'] for r in rows})
+
+    def test_messages_to_a_quoting_supplier_are_negotiations(self):
+        thread = ("From: Vendor <rates@vendor.example>\nSent: 22 October 2026\nTo: Our Person <sales@ourco.example>\n"
+                  "Subject: RE: RFQ\nAIR FREIGHT : AED 93370/- (DOOR TO DOOR)\nRegards\nVendor LLC\n"
+                  "From: Our Person <sales@ourco.example>\nSent: 21 October 2026\nTo: Vendor <rates@vendor.example>\n"
+                  "Subject: RE: RFQ\nCan we reduce the 2nd option ALL IN CHARGES : AED 93370/- to 91000.00 AED\n"
+                  "Kind Regards\nFrom Our Group, UAE\n")
+        self.assertEqual(internal_quote_rows(thread), [])

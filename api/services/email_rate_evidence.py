@@ -26,7 +26,9 @@ def _label(text):
 
 
 def _condition(text):
-    text = clean(text).strip(' ;,.:+–—-')
+    # "/-" and "/=" after an amount are price-ending marks, not conditions.
+    text = re.sub(r"^\s*/\s*[-=]+", "", clean(text)).strip(' ;,.:+–—-/')
+    text = re.sub(r"^\((.*)\)$", r"\1", text).strip()
     if not re.search(r'[A-Za-z0-9]', text) or re.fullmatch(r'(?:will\s+)?(?:be\s+)?applicable', text, re.I):
         return ''
     return text

@@ -131,3 +131,69 @@ class PriceCalculationTests(SimpleTestCase):
         result = collapse_calculated_totals({'items': items})
         self.assertEqual([i['product_name'] for i in result['items']], ['Valve DN50', 'Gasket'])
         self.assertEqual(result['items'][0]['line_total'], '600')
+
+
+AIR_THREAD = """From: Agent One / Example Freight <agent1@examplefreight.example>
+Sent: Monday, 19 October 2026 8:29 pm
+To: Buyer <buyer@buyer.example>
+Subject: RE: RFQ air freight
+Please find the below best rate for your enquiry,
+AIR IMPORT ESTIMATE
+TERM
+EXW
+AIRLINE
+EY
+AOL
+EHU
+AOD
+AUH
+CHARGEABLE WEIGHT
+4380 KGS
+ROUTE: EHU-AUH
+TT: 1-2 days.
+ALL IN CHARGES : AED 90800/- (DOOR TO DOOR)
+AIR IMPORT ESTIMATE
+TERM
+EXW
+AIRLINE
+EY
+AOL
+PVG
+AOD
+AUH
+ROUTE: PVG-AUH
+ALL IN CHARGES : AED 93370/- (DOOR TO DOOR)
+Regards
+Agent One
+Example Freight LLC
+From: Agent One / Example Freight
+Sent: Thursday, October 22, 2026 2:01 PM
+To: Buyer <buyer@buyer.example>
+Subject: RE: RFQ air freight
+AIR IMPORT ESTIMATE
+AOL
+PVG
+AOD
+AUH
+ALL IN CHARGES : AED 94370/- (DOOR TO DOOR)
+"""
+
+
+class AirEstimateTests(SimpleTestCase):
+    def test_each_estimate_keeps_its_own_route_and_supplier(self):
+        rows = freight_offer_rows(AIR_THREAD)
+        self.assertEqual([(r['purchase_date'], r['product_name'], r['unit_price']) for r in rows], [
+            ('2026-10-19', 'Air Freight All in Charges (Door to Door) - EHU to AUH', '90800'),
+            ('2026-10-19', 'Air Freight All in Charges (Door to Door) - PVG to AUH', '93370'),
+            # Forwarded copy without an address inherits the sender's company.
+            ('2026-10-22', 'Air Freight All in Charges (Door to Door) - PVG to AUH', '94370'),
+        ])
+        self.assertEqual({r['supplier_name'] for r in rows}, {'Example Freight LLC'})
+        self.assertIn({'label': 'Airline', 'value': 'EY'}, rows[0]['extra_attributes'])
+
+    def test_same_line_rate_rows_are_replaced_by_the_estimate(self):
+        from api.services.email_rate_evidence import restore_rates
+        result = restore_rates({'items': []}, AIR_THREAD)
+        self.assertEqual({str(r['extra_attributes']) for r in result['items']}, {str([{'label': 'Condition / inclusions', 'value': 'DOOR TO DOOR'}])})
+        result = restore_freight_offers(result, AIR_THREAD)
+        self.assertEqual(sorted(r['unit_price'] for r in result['items']), ['90800', '93370', '94370'])

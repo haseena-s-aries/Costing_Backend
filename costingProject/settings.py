@@ -39,6 +39,16 @@ load_local_env(BASE_DIR / ".env")
 # environment cannot expose variables.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+# Email domains of our own organisation. A price written by one of these
+# senders to a client is our quotation, not a supplier offer. Comma separated;
+# subdomains match.
+INTERNAL_COMPANY_DOMAINS = [
+    value.strip().lower()
+    for value in (os.environ.get("INTERNAL_COMPANY_DOMAINS") or
+                  "arteqworld.com,ariesmar.com,ariesgroupglobal.com,ariesenergyglobal.com,"
+                  "ariesenergygroup.com,ariesofs.ae,aries-network.com").split(",")
+    if value.strip()
+]
 
 with open(BASE_DIR / "debug.txt", "w") as f:
     f.write(f"BASE_DIR = {BASE_DIR}\n")

@@ -58,6 +58,7 @@ CORE_EXTRACTION_RULES = """
 - Return null when uncertain.
 - Every separately visible priced row/amount must remain a separate item.
 - Never merge or add separate commercial amounts.
+- If a booking confirmation, receipt, courier/shipping screenshot or similar shows only ONE charged total for a single service and no line items, return that service as ONE item (e.g. "Courier shipment") priced at the charged total, with visible details such as chargeable weight or route in extra_attributes; quantity stays null. Use the amount actually charged, never a struck-through/original price.
 - Bind description, quantity, rate and amount only to their own visual row/block.
 - SOURCE CELL BOUNDARY IS AUTHORITATIVE. If a Product Description, Description, or Item Description cell contains technical details, specifications, model/part numbers, dimensions, materials, standards, certification details, voltage, ratings, or other identity text inside that SAME physical source cell/block, preserve the COMPLETE cell text in product_name. Do not shorten product_name by moving text from that same cell into specification, model, part_number, brand, remark, note, or extra_attributes. Populate dedicated fields separately only when the source exposes them as separate labelled columns/fields.
 - extra_attributes preserves only separate visible columns/fields outside those cells, with original labels (including Model/Remark). Exclude document headers. Never invent labels from prose.

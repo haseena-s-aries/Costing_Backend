@@ -59,3 +59,24 @@ class CommercialConsistencyTests(SimpleTestCase):
                  dict(product_name='STORAGE CHARGE AT POD BY CARRIER', unit_price='200', currency='USD',
                       purchase_date='2026-10-27', supplier_name='Seller LLC', _explicit_email_rate=True)]
         self.assertEqual(len(finalize({'items': items})['items']), 2)
+
+
+class SingleTotalDocumentTests(SimpleTestCase):
+    def test_only_a_total_becomes_one_reviewable_service_row(self):
+        result = finalize({'currency': 'AED', 'grand_total': '1935.50', 'items': [
+            dict(product_name='Estimated total cost', unit_price='1935.50', currency='AED',
+                 extra_attributes=[{'label': 'Chargeable weight', 'value': '48.4 kg'}])]})
+        self.assertEqual([(i['product_name'], i['unit_price'], i['quantity'], i['row_type']) for i in result['items']],
+                         [('Shipment charges', '1935.50', None, 'SERVICE')])
+        self.assertIn('single_total_document', result['_review_reasons'])
+        self.assertIn({'label': 'Source label', 'value': 'Estimated total cost'}, result['items'][0]['extra_attributes'])
+
+    def test_no_items_but_stated_total(self):
+        result = finalize({'currency': 'AED', 'grand_total': '500', 'items': []})
+        self.assertEqual([(i['product_name'], i['unit_price']) for i in result['items']], [('Service charges', '500')])
+
+    def test_total_rows_next_to_real_items_are_not_turned_into_items(self):
+        items = [dict(product_name='Valve', quantity='2', unit_price='50', line_total='100', currency='USD'),
+                 dict(product_name='Total amount', unit_price='100', currency='USD')]
+        result = finalize({'items': items, 'grand_total': '100'})
+        self.assertEqual([i['product_name'] for i in result['items']], ['Valve'])

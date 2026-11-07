@@ -3968,7 +3968,9 @@ def _normalize_item(item, default_currency):
         "currency": currency,
         "page_number": page_number,
         "supplier_name": _normalize_supplier_name(item.get("supplier_name")),
-        "buyer_name": None,
+        # Only our own quotation rows carry their client (taken from the
+        # thread itself); other rows never inherit a page-level buyer.
+        "buyer_name": _clean_text(item.get("buyer_name")) if item.get("_internal_quote") else None,
         "source_document_type": _clean_text(item.get("source_document_type")),
         "source_category": (
             "INVOICE"
@@ -12131,6 +12133,8 @@ Rules:
             result = restore_freight_offers(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
             from api.services.freight_quote_sections import collapse_calculated_totals
             result = collapse_calculated_totals(result)
+            from api.services.internal_quote_prices import restore_internal_quotes
+            result = restore_internal_quotes(result, msg_meta.get('body'), msg_meta.get('sender'), msg_meta.get('sent_date'))
             from api.services.word_description_evidence import restore_descriptions
             result = restore_descriptions(result, msg_meta.get('source_word_texts') or [])
             for item in result.get('items') or []:

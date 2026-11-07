@@ -112,6 +112,8 @@ class ExtractionOrchestrator:
             if thread_text:
                 from api.services.freight_quote_sections import collapse_calculated_totals
                 result = collapse_calculated_totals(restore_freight_offers(result, thread_text))
+                from api.services.internal_quote_prices import restore_internal_quotes
+                result = restore_internal_quotes(result, thread_text)
             if not result.get('_authoritative_supplier_matrix'):
                 from api.services.pdf_catalog_rates import recover_catalog_rates
                 result = recover_catalog_rates(result, bytes(raw))
@@ -120,7 +122,8 @@ class ExtractionOrchestrator:
             from api.services.yen_currency_hint import resolve_yen_currency
             from api.services.freight_quote_sections import pdf_text
             result = resolve_yen_currency(result, pdf_text(bytes(raw)))
-            if result.get('_source_email_quote_count') or result.get('_freight_section_count'):
+            if (result.get('_source_email_quote_count') or result.get('_freight_section_count')
+                    or result.get('_internal_quote_count')):
                 for item in result.get('items') or []:
                     item['display_name'] = build_canonical_display_name(item)
             if result.get('_source_email_quote_count'):

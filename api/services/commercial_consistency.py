@@ -132,8 +132,47 @@ def reconcile_totals(items, result):
     return items
 
 
+TOTAL_LABEL = re.compile(r"\b(?:grand\s+)?total\b|\bnet\s+amount\b|\bamount\s+(?:due|payable)\b", re.I)
+SHIPMENT_HINT = re.compile(r"\b(?:shipment|shipping|courier|freight|tracking|chargeable\s+weight|waybill|AWB|"
+                           r"consignment|parcel|pickup)\b", re.I)
+
+
+def single_total_service(result, items):
+    """A document whose only price is its total (a booking confirmation,
+    receipt or courier screenshot) keeps that price as ONE reviewable row
+    instead of losing it as a 'total' line. With real line items, total
+    rows are still dropped elsewhere."""
+    priced = [i for i in items if _amount(i.get('unit_price') or i.get('line_total')) is not None]
+    if any(not TOTAL_LABEL.search(str(i.get('product_name') or '')) for i in priced) or len(priced) > 1:
+        return items
+    source = priced[0] if priced else None
+    amount = _amount((source or {}).get('unit_price') or (source or {}).get('line_total')) if source \
+        else _amount(result.get('grand_total'))
+    code = (source or {}).get('currency') or result.get('currency')
+    if amount is None or not code:
+        return items
+    attrs = list((source or {}).get('extra_attributes') or [])
+    context = ' '.join(str(v) for v in [result.get('document_type'), result.get('category'), result.get('title'),
+                                       *(f"{a.get('label')} {a.get('value')}" for a in attrs if isinstance(a, dict)),
+                                       (source or {}).get('product_name')] if v)
+    # Never a 'total' name: the review sheet drops total lines.
+    name = 'Shipment charges' if SHIPMENT_HINT.search(context) else 'Service charges'
+    if source and source.get('product_name'):
+        attrs.append({'label': 'Source label', 'value': str(source['product_name'])})
+    row = dict(source or {}, product_name=name, display_name=name, unit_price=str(amount), line_total=None,
+               quantity=(source or {}).get('quantity') if source and source.get('_quantity_printed') else None,
+               currency=code, row_type='SERVICE', extra_attributes=attrs,
+               supplier_name=(source or {}).get('supplier_name') or result.get('supplier_name'),
+               purchase_date=(source or {}).get('purchase_date') or result.get('document_date'))
+    reasons = list(result.get('_review_reasons') or [])
+    result['_review_reasons'] = list(dict.fromkeys([*reasons, 'single_total_document']))
+    result['_needs_review'] = True
+    return [i for i in items if i is not source] + [row]
+
+
 def finalize(result):
     items = list(result.get('items') or [])
+    items = single_total_service(result, items)
     if not items:
         return result
     classify_services(items)

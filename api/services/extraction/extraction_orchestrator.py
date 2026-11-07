@@ -142,6 +142,8 @@ class ExtractionOrchestrator:
         if suffix in {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff', '.bmp'}:
             from api.services.currency_evidence_policy import require_image_currency_evidence
             result = require_image_currency_evidence(result)
+        from api.services.commercial_consistency import finalize as finalize_commercial
+        result = finalize_commercial(result)
         return required_metadata(result)
 
     def _extract_archive(self, raw, original_file_name, import_batch):

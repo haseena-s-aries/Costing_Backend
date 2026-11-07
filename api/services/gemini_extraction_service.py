@@ -3474,7 +3474,8 @@ def _item_has_current_page_commercial_evidence(item, page_bytes, page_number, su
     }
     for word in words:
         text = str(word.get("text") or "").strip()
-        amount = _decimal(text)
+        # "1600/-" and "1600/=" are printed price endings, not other text.
+        amount = _decimal(re.sub(r"/[-=]*$", "", text))
         if amount not in wanted:
             continue
         center_x = (float(word.get("x0", 0)) + float(word.get("x1", 0))) / 2
@@ -5063,6 +5064,21 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                 line_total = amount
             if re.search(r"\bfuel\s+price\s+adjustment\b", name, re.I):
                 continue
+            # "Thanks for your enquiry, pleased to offer AED 1600/- per 7 ton
+            # from A to B": the text before the amount names nothing; the
+            # service is described after the amount and its rate basis.
+            from api.services.commercial_consistency import _is_filler
+            filler_name = _is_filler(name)
+            if filler_name:
+                basis = re.match(r"\s*per\s+(\d+(?:\.\d+)?\s*[A-Za-z]+)", tail or "", re.I)
+                rest = (tail[basis.end():] if basis else (tail or "")).strip(" .,-")
+                if rest and not _is_filler(rest):
+                    name = rest[:1].upper() + rest[1:]
+                if basis:
+                    extra_attributes.append({"label": "Rate basis", "value": f"per {basis.group(1)}"})
+                    # A rate "per 7 ton" is not a line total.
+                    if not explicit_total:
+                        line_total = None
             # "Net amount confirmed is : USD X" restates a total; it is not
             # a separate priced item.
             if re.search(r"^net\s+(?:amount|total|value)\b|\b(?:amount|total|value)\s+(?:is\s+)?confirmed\b",
@@ -5098,6 +5114,7 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                 "price_reference_quality": 5,
                 "_keep_duplicate_priced_row": True,
                 "source_row_id": f"pdf-text-line:{index}",
+                "_filler_name": filler_name,
             })
 
             continue
@@ -5238,6 +5255,25 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
         if not _has_equivalent_commercial_item(unique, item):
             unique.append(item)
     return unique
+
+def _adopt_model_names(recovered, model_items):
+    """A recovered price line whose own text only greets ("Thanks for your
+    enquiry, pleased to offer AED 1600") takes the description of the model
+    row with the same amount and currency, when exactly one exists."""
+    for item in recovered or []:
+        if not item.get("_filler_name"):
+            continue
+        twins = [m for m in model_items or []
+                 if _decimal(m.get("unit_price")) == _decimal(item.get("unit_price"))
+                 and (not m.get("currency") or not item.get("currency") or m.get("currency") == item.get("currency"))
+                 and _clean_text(m.get("product_name"))]
+        names = {_clean_text(m.get("product_name")) for m in twins}
+        if len(names) == 1:
+            item["product_name"] = names.pop()
+            item["display_name"] = item["product_name"]
+            item["_filler_name"] = False
+    return recovered
+
 
 def _nearest_previous_email_date(text, position):
     before_text = (text or "")[:position]
@@ -11225,6 +11261,8 @@ Rules:
                         len(existing_items) + len(tariff_items),
                     )
 
+                    tariff_items = _adopt_model_names(tariff_items, existing_items)
+
                     result = finalize_pdf(result, file_bytes, recovery_items=tariff_items)
                     logger.warning(
                         "POST_MERGE_TRACE helper=%s before=%s after=%s",
@@ -11562,6 +11600,8 @@ Rules:
                     len(existing_items),
                     len(existing_items) + len(tariff_items),
                 )
+
+                tariff_items = _adopt_model_names(tariff_items, existing_items)
 
                 result = finalize_pdf(result, file_bytes, recovery_items=tariff_items)
                 logger.warning(

@@ -80,3 +80,52 @@ class SingleTotalDocumentTests(SimpleTestCase):
                  dict(product_name='Total amount', unit_price='100', currency='USD')]
         result = finalize({'items': items, 'grand_total': '100'})
         self.assertEqual([i['product_name'] for i in result['items']], ['Valve'])
+
+
+class FillerPriceLineTests(SimpleTestCase):
+    def test_greeting_named_twin_is_dropped(self):
+        items = [dict(product_name='Pick up of the materials from DMC to MBK Jetty', unit_price='1600', currency='AED',
+                      purchase_date='2026-10-19', row_type='PRODUCT'),
+                 dict(product_name='Thanks for your enquiry, pleased to offer', unit_price='1600', currency='AED',
+                      purchase_date='2026-10-19', row_type='SERVICE')]
+        result = finalize({'items': items})
+        self.assertEqual([(i['product_name'], i['row_type']) for i in result['items']],
+                         [('Pick up of the materials from DMC to MBK Jetty', 'SERVICE')])
+
+    def test_lone_filler_row_is_kept_for_review_and_dates_matter(self):
+        result = finalize({'items': [dict(product_name='Please find our best price', unit_price='90', currency='USD')]})
+        self.assertEqual(len(result['items']), 1)
+        self.assertIn('unnamed_price_line', result['_review_reasons'])
+        items = [dict(product_name='Crane hire', unit_price='90', currency='USD', purchase_date='2026-01-01'),
+                 dict(product_name='Thanks, pleased to offer', unit_price='90', currency='USD', purchase_date='2026-02-01')]
+        self.assertEqual(len(finalize({'items': items})['items']), 2)
+
+    def test_real_names_are_not_filler(self):
+        from api.services.commercial_consistency import _is_filler
+        for name in ('Offer for VFD supply', 'Transport offer DMC to MBK', 'Pick up of materials', 'ZB5AD2C+ZB5AZ105C'):
+            self.assertFalse(_is_filler(name))
+
+
+class PdfRecoveryNameTests(SimpleTestCase):
+    def test_greeting_before_price_keeps_row_description(self):
+        from api.services.source_reconciliation import _verified_pdf_identity
+        line = 'Thanks for your enquiry, pleased to offer AED 1600/- per 7 ton from DMC to MBK Jetty.'
+        self.assertEqual(_verified_pdf_identity(line, 'From DMC to MBK Jetty')[0], 'From DMC to MBK Jetty')
+        self.assertEqual(_verified_pdf_identity('Launch hire AED 500/- per hour', 'x')[0], 'Launch hire')
+
+    def test_recovered_filler_line_adopts_model_name(self):
+        from api.services.gemini_extraction_service import _adopt_model_names
+        recovered = [dict(product_name='From DMC to MBK Jetty', unit_price='1600', currency='AED', _filler_name=True)]
+        model = [dict(product_name='Pick up of the materials from DMC to MBK Jetty', unit_price='1600', currency='AED')]
+        self.assertEqual(_adopt_model_names(recovered, model)[0]['product_name'],
+                         'Pick up of the materials from DMC to MBK Jetty')
+
+    def test_default_quantity_one_does_not_block_or_survive_a_source_merge(self):
+        from api.services.source_reconciliation import merge_recovery
+        existing = [dict(product_name='Pick up of the materials from DMC to MBK Jetty', unit_price='1600', currency='AED',
+                         quantity=1, page_number=1, purchase_date='2026-10-19')]
+        fact = dict(product_name='DMC to MBK Jetty', unit_price='1600', currency='AED', quantity=None, page_number=1,
+                    purchase_date='2026-10-19', _source_fact_verified=True)
+        merged = merge_recovery(existing, [fact])
+        self.assertEqual([(m['product_name'], m['quantity']) for m in merged],
+                         [('Pick up of the materials from DMC to MBK Jetty', None)])

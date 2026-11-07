@@ -30,7 +30,7 @@ from api.services.normalization import is_contact_only_supplier
 from api.services.extraction.extraction_orchestrator import ExtractionOrchestrator
 
 logger = logging.getLogger(__name__)
-EXTRACTION_PIPELINE_VERSION = "2026-10-21-source-currency-evidence-1"
+EXTRACTION_PIPELINE_VERSION = "2026-11-07-email-thread-quotes-1"
 def resolve_import_metadata(batch):
     """
     Single source of truth for document metadata.

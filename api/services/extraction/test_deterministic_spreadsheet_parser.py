@@ -268,3 +268,33 @@ class DeterministicSpreadsheetParserTests(SimpleTestCase):
         result = DeterministicSpreadsheetParser().extract({"file_type": "spreadsheet", "rows": rows}, structure)
         self.assertEqual([(i["quantity"], i["uom"], i["unit_price"], i["line_total"]) for i in result["items"]],
                          [("20.0", "M", "3.7", "74.0"), ("30.0", "M", "3.09", "92.7")])
+
+    def test_each_worksheet_uses_its_own_header(self):
+        def row(sheet, number, values):
+            return {"sheet": sheet, "row_number": number, "values": values}
+        rows = [
+            row("Comparison", 1, ["SL NO", "DESCRIPTION", "QTY", "UNIT", "SUPPLIER A", "", "SUPPLIER B", ""]),
+            row("Comparison", 2, ["1", "SELECTOR SWITCH 22MM", "12", "", "4.5", "54", "5", "60"]),
+            row("Comparison", 3, ["2", "RELAY 24V DC WITH BASE", "14", "", "4", "56", "7", "98"]),
+            row("Shortage", 1, ["Sl no", "shortage", "QTY PER VESSEL", "6 VESSELS", "qty FOR 6", "unit", "Supplier A", "", "Supplier C", ""]),
+            row("Shortage", 2, ["", "", "", "", "", "", "up", "tp", "UP", "TP"]),
+            row("Shortage", 3, ["1", "ZB5AD2C+ZB5AZ105C", "4", "6", "24", "", "4.5", "18", "7.34", "29.36"]),
+            row("Shortage", 4, ["2", "XB2BVM3LC,", "4", "6", "24", "", "2.4", "9.6", "4.37", "17.48"]),
+        ]
+        structure = StructureDetector().detect({"file_type": "spreadsheet", "rows": rows})
+        structure.structure = StructureDetector.STANDARD_TABLE
+        result = DeterministicSpreadsheetParser().extract({"file_type": "spreadsheet", "rows": rows}, structure)
+        shortage = [(i["product_name"], i["supplier_name"], i["quantity"], i["unit_price"], i["line_total"])
+                    for i in result["items"] if i["source_reference"].startswith("Shortage")]
+        self.assertEqual(shortage, [
+            ("ZB5AD2C+ZB5AZ105C", "Supplier A", "4", "4.5", "18"),
+            ("ZB5AD2C+ZB5AZ105C", "Supplier C", "4", "7.34", "29.36"),
+            ("XB2BVM3LC", "Supplier A", "4", "2.4", "9.6"),
+            ("XB2BVM3LC", "Supplier C", "4", "4.37", "17.48"),
+        ])
+        self.assertEqual(len([i for i in result["items"] if i["source_reference"].startswith("Comparison")]), 4)
+
+    def test_ampere_trip_is_a_product_attribute(self):
+        from api.services.gemini_extraction_service import _canonical_row_type
+        self.assertEqual(_canonical_row_type("PRODUCT", {"product_name": "MCB 2P AMPERE TRIP: 6A CURVE C"}), "PRODUCT")
+        self.assertEqual(_canonical_row_type("PRODUCT", {"product_name": "Crane hire per trip"}), "SERVICE")

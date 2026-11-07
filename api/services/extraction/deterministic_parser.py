@@ -9,6 +9,34 @@ class DeterministicSpreadsheetParser:
     def extract(self, document, structure, profile=None):
         if getattr(structure, "structure", structure) != "STANDARD_TABLE":
             return None
+        combined = self._extract_rows(document, structure, profile)
+        # Workbooks may hold one independent table per worksheet, each with
+        # its own header (e.g. a comparison sheet and a shortage sheet).
+        # Parse each worksheet with its own header; use that only when at
+        # least two worksheets produce rows, otherwise keep the combined
+        # result (single sheets, or continuation sheets without a header).
+        sheets = list(dict.fromkeys(row.get("sheet") for row in document.get("rows") or []))
+        if len(sheets) < 2:
+            return combined
+        per_sheet = []
+        for sheet in sheets:
+            sheet_document = dict(document, rows=[r for r in document.get("rows") or [] if r.get("sheet") == sheet])
+            try:
+                result = self._extract_rows(sheet_document, structure, profile)
+            except Exception:
+                result = None
+            if result and result.get("items"):
+                per_sheet.append(result)
+        if len(per_sheet) < 2:
+            return combined
+        merged = dict(per_sheet[0])
+        merged["items"] = [item for result in per_sheet for item in result["items"]]
+        for key in ("supplier_name", "document_date", "currency", "document_number"):
+            values = {result.get(key) for result in per_sheet if result.get(key)}
+            merged[key] = next(iter(values)) if len(values) == 1 else None
+        return merged
+
+    def _extract_rows(self, document, structure, profile=None):
         rows = self._eligible_commercial_rows(document.get("rows") or [], profile)
         if not rows:
             return None
@@ -109,6 +137,9 @@ class DeterministicSpreadsheetParser:
                 continue
 
             product = self._value(values, columns["product_name"])
+            if isinstance(product, str):
+                # A cell-ending separator ("XB2BVM3LC,") is not part of the name.
+                product = product.strip().rstrip(",;") or None
             if not product:
                 continue
             normalized_product = normalize_header(product)
@@ -414,6 +445,32 @@ class DeterministicSpreadsheetParser:
         return bool(re.fullmatch(r"(?:[A-Za-z$€£¥د.إ]+\s*)?[-+]?\d+(?:\.\d+)?(?:\s*[A-Za-z$€£¥]+)?", text))
 
     @classmethod
+    def _structural_product_column(cls, rows, header_index, profile=None):
+        """Item column when no header alias names it (e.g. "Shortage" holding
+        part numbers): the leftmost labelled column whose data cells are
+        mostly text, excluding serial/qty/unit/price/total/remark columns."""
+        if header_index is None:
+            return None
+        header_rows = [rows[header_index]["values"]] + ([rows[header_index - 1]["values"]] if header_index else [])
+        data = [r["values"] for r in rows[header_index + 1:header_index + 12] if any(str(v or "").strip() for v in r["values"])]
+        if not data:
+            return None
+        width = max(len(values) for values in header_rows)
+        known = set().union(*(aliases_for(field, profile) for field in FIELDS if field != "product_name"),
+                            aliases_for("remark", profile))
+        for index in range(width):
+            labels = [normalize_header(values[index]) for values in header_rows if index < len(values)]
+            labels = [label for label in labels if label]
+            if not labels or any(label in known or label in {"no", "sl no", "s no", "serial no", "item no"}
+                                 or re.match(r"(?:qty|quantity|unit|uom)\b", label) for label in labels):
+                continue
+            cells = [str(values[index]).strip() if index < len(values) and values[index] is not None else "" for values in data]
+            texty = [cell for cell in cells if re.search(r"[A-Za-z]", cell) and not cls._is_number(cell)]
+            if len(texty) >= max(2, int(len(data) * 0.6)):
+                return index
+        return None
+
+    @classmethod
     def _find_grouped_header(cls, rows, profile=None):
         for index in range(min(20, len(rows) - 1)):
             combined = []
@@ -432,6 +489,8 @@ class DeterministicSpreadsheetParser:
                 or normalize_header(value) in aliases_for("line_total", profile)
                 for value in rows[index + 1]["values"]
             )
+            if not has_product and has_price and hits >= 2:
+                has_product = cls._structural_product_column(rows, index + 1, profile) is not None
             if has_product and has_price and hits >= 2:
                 return index + 1
         return None
@@ -712,13 +771,17 @@ class DeterministicSpreadsheetParser:
         for index, value in enumerate(sub_values):
             if normalize_header(value) in aliases:
                 return index
-        # Combined labels such as "Quantity in meters" still identify the
-        # quantity column structurally when no exact alias exists.
+        # Combined labels such as "Quantity in meters" or "Qty per vessel"
+        # still identify the quantity column structurally when no exact
+        # alias exists; the first such column is the item quantity.
         if field == "quantity":
             for index in range(len(top_values)):
                 normalized = normalize_header(top_values[index])
-                if "quantity" in normalized or normalized in {"base qty", "base quantity"}:
+                if ("quantity" in normalized or normalized in {"base qty", "base quantity"}
+                        or re.match(r"qty\b", normalized)):
                     return index
+        if field == "product_name":
+            return cls._structural_product_column(rows, header_index, profile)
         return None
 
     @staticmethod

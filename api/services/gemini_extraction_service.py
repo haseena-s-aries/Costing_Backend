@@ -2709,10 +2709,13 @@ def _canonical_row_type(value, item=None):
 
     transport_words = bool(
         re.search(
-            r"\b(transport|transportation|delivery|truck|trucking|haulage|loading|offloading|shipment|freight|cartage|trip)\b",
+            r"\b(transport|transportation|delivery|truck|trucking|haulage|loading|offloading|shipment|freight|cartage)\b",
             name_text,
             re.I,
         )
+        # "Trip" is transport only when counted ("per trip", "2 trips");
+        # an electrical "ampere trip"/"trip unit" is a product attribute.
+        or re.search(r"\b(?:per|each|one|two|three|\d+)\s+trips?\b", name_text, re.I)
     )
 
     transport_supplier = bool(

@@ -2365,7 +2365,10 @@ def _finalize_email_quote_metadata(result):
             review_reasons = list(result.get("_review_reasons") or [])
             review_reasons.append("missing_segment_provenance")
             result["_review_reasons"] = list(dict.fromkeys(review_reasons))
-            item["line_total"] = None
+            # A total reconciled against the stated grand total is source
+            # backed even without a per-row segment.
+            if not item.get("_line_total_reconciled"):
+                item["line_total"] = None
 
         # A bare yen symbol has no country information. Keep the currency
         # unresolved unless the source explicitly qualifies it.
@@ -2374,7 +2377,7 @@ def _finalize_email_quote_metadata(result):
                 item["currency"] = None
 
         # Preserve only totals printed in the same commercial segment.
-        if source and item.get("line_total") and not re.search(
+        if source and item.get("line_total") and not item.get("_line_total_reconciled") and not re.search(
             r"(?:=|\btotal(?:\s+cost)?\b|\bamount\b|\bamt\b|\bcharges?\b)\s*[:=-]?\s*(?:[A-Z]{3}\s*)?[\d,]+(?:\.\d+)?",
             source,
             re.I,

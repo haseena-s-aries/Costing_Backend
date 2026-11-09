@@ -31,9 +31,11 @@ SERVICE = re.compile(
 NOT_SERVICE = re.compile(
     r"\b(?:total|invoice value|CIF value|insurance|premium|storage|demurrage|detention|"
     r"inspection|waiting|surcharge|EEC|DTT|duty|VAT)\b", re.I)
-OPTION = re.compile(r"^\s*option\s*[-–:#.]?\s*(\d+)\s*[:.)-]?\s*$", re.I)
+# Quotation alternatives: "Option 1", "Collection 2", "Alternative 3", "Offer 1".
+OPTION = re.compile(r"^\s*(option|collection|alternative|offer)\s*[-–:#.]?\s*(\d+)\s*[:.)-]?\s*$", re.I)
 SIZE = re.compile(
-    r"(?<![\d.])(20|40|45)\s*(?:(?P<ft>['’′]|ft\b|feet\b|foot\b)|(?P<type>GP|DV|HC|HQ|RF|RH|OT|FR|STD|DC)\b)",
+    r"(?<![\d.])(20|40|45)\s*(?:(?P<ft>['’′]|ft\b|feet\b|foot\b)(?:\s*(?P<type2>GP|DV|HC|HQ|RF|RH|OT|FR|STD|DC)\b)?"
+    r"|(?P<type>GP|DV|HC|HQ|RF|RH|OT|FR|STD|DC)\b)",
     re.I)
 FIELDS = {
     'origin': r"POL|AOL|port\s+of\s+loading|loading\s+port|airport\s+of\s+(?:loading|departure)|"
@@ -81,8 +83,10 @@ def _title(text):
 
 
 def _place(value):
-    """Location value without hedges ("Tianjin or nearby" -> "Tianjin")."""
+    """Location value without hedges or notes ("Tianjin or nearby" ->
+    "Tianjin", "AUH port ( AUH delivery )" -> "AUH port")."""
     value = re.sub(r"\s+or\s+(?:nearby|near\s*by|any|equivalent|similar)\b.*$", "", clean(value), flags=re.I)
+    value = re.sub(r"\s*\([^)]*\)\s*$", "", value)
     return value.strip(" .,;:-–")
 
 
@@ -111,7 +115,9 @@ def _size(text):
     match = SIZE.search(text or '')
     if not match:
         return None
-    return match[1] + ('FT' if match['ft'] else match['type'].upper())
+    # "40 ft OT" is a 40' open-top container: the type identifies it.
+    kind = match['type'] or match['type2']
+    return match[1] + (kind.upper() if kind else 'FT')
 
 
 def _field_values(lines):
@@ -169,7 +175,16 @@ def _supplier(block, companies, blocks=()):
     # Only a printed company whose name spells the sender's domain stem
     # (e.g. "Example Shipping LLC" for example-shipping.com) is accepted.
     names = companies.get(re.sub(r"[^a-z]", "", stem), set())
-    return next(iter(names)) if len(names) == 1 else None
+    if len(names) == 1:
+        return next(iter(names))
+    # The sender display name often carries the company: "Person - Example
+    # Kingston" <person@examplekingston.com>.
+    display = re.sub(r"\s*<.*$", "", clean(block.get('sender'))).strip(" '\"")
+    key = re.sub(r"[^a-z]", "", stem)
+    for part in re.split(r"\s+[-–/|]\s+|\s*\|\s*", display):
+        if len(key) >= 4 and re.sub(r"[^a-z]", "", part.lower()) == key:
+            return clean(part)
+    return None
 
 
 def _signature_company(stem, blocks):
@@ -227,7 +242,7 @@ def _sections(lines):
     for line in lines:
         option = OPTION.match(line)
         if option:
-            current = {'option': option[1], 'lines': []}
+            current = {'option': option[2], 'kind': option[1].title(), 'lines': []}
             sections.append(current)
         elif current is None:
             shared.append(line)
@@ -344,6 +359,12 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                 fields = {key: (_place(value) if key in ('origin', 'destination') else value)
                           for key, value in fields.items()}
                 size = _size(remainder) or _size(fields.get('container')) or _size(label)
+                # "for 7 x 40 ft OT": seven containers at the quoted per-container rate.
+                count = re.search(r"\b(\d+)\s*[x×]\s*(?=(?:20|40|45)\s*(?:ft|feet|'|’|GP|HC|HQ|OT|RF|DV)\b)", label, re.I)
+                if count and not quantity:
+                    quantity, uom = count[1], uom or 'container'
+                    label = re.sub(r"\s*\bfor\s+" + count[1] + r"\s*[x×]\s*", " ", label, flags=re.I)
+                    label = re.sub(r"\b" + count[1] + r"\s*[x×]\s*", "", label, count=1)
                 head = _title(label) + (f" ({_title(term)})" if term else '')
                 # Mode comes from the heading above the price only, never from
                 # an inclusions list printed after it.
@@ -354,10 +375,10 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                 parts = [head]
                 if fields.get('origin') and fields.get('destination'):
                     parts.append(f"{_title(fields['origin'])} to {_title(fields['destination'])}")
-                if size and size not in re.sub(r"\s+", "", label).upper().replace("'", 'FT'):
+                if size and size != _size(label) and size not in re.sub(r"\s+", "", label).upper().replace("'", 'FT'):
                     parts.append(size)
                 elif not size and section['option']:
-                    parts.append(f"Option {section['option']}")
+                    parts.append(f"{section.get('kind', 'Option')} {section['option']}")
                 name = ' - '.join(parts)
                 attrs = [{'label': LABELS[key], 'value': fields[key]}
                          for key in ('origin', 'destination', 'route', 'airline', 'carrier', 'term', 'weight', 'transit')
@@ -365,8 +386,10 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                 if size:
                     attrs.append({'label': 'Container size', 'value': size})
                 if section['option']:
-                    attrs.append({'label': 'Quotation option', 'value': f"Option {section['option']}"})
+                    attrs.append({'label': 'Quotation option', 'value': f"{section.get('kind', 'Option')} {section['option']}"})
                 condition = re.sub(r"^\s*/\s*[-=]+", "", remainder)
+                # "/ per Cntr" is the pricing basis, not a condition.
+                condition = re.sub(r"^\s*/?\s*per\s+(?:cntr|container|unit|box|truck|trip|shipment)\b\.?", "", condition, flags=re.I)
                 if trailing:
                     condition = condition.replace(trailing.group(0).strip(), '')
                 condition = re.sub(SIZE, '', condition).strip(" ()-–,")

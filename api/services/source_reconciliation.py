@@ -44,7 +44,7 @@ def _verified_pdf_identity(source_context, fallback_name):
         identity_source, re.I,
     )
     identity = identity_source[:price.start()] if price else identity_source
-    identity = re.sub(r"\s+", " ", identity).strip(" -–—:.,")
+    identity = re.sub(r"\s+", " ", identity).strip(" -–—:.,@=")
     # Greeting/offer text before the price ("Thanks for your enquiry,
     # pleased to offer") names nothing; keep the row's own description.
     from api.services.commercial_consistency import _is_filler

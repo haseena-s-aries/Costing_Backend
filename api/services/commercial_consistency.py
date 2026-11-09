@@ -50,9 +50,16 @@ MOVEMENT_ROUTE = re.compile(r"\b(?:pick[- ]?up|delivery|deliver|collection|shift
                             r".*\bfrom\s+\S.*\bto\s+\S|^\s*from\s+\S.*\bto\s+\S", re.I)
 
 
+# Time-based penalties after free time are charges, not products.
+PENALTY = re.compile(r"\b(?:standby|stand-by|waiting|demurrage|detention|storage)\b", re.I)
+
+
 def classify_services(items):
     for item in items:
         name = str(item.get('product_name') or '')
+        if str(item.get('row_type') or 'PRODUCT').upper() == 'PRODUCT' and PENALTY.search(name):
+            item['row_type'] = 'CHARGE'
+            continue
         if str(item.get('row_type') or 'PRODUCT').upper() == 'PRODUCT' and (TRANSPORT.search(name) or MOVEMENT_ROUTE.search(name)):
             item['row_type'] = 'SERVICE'
 

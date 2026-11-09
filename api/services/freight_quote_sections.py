@@ -39,9 +39,9 @@ SIZE = re.compile(
     re.I)
 FIELDS = {
     'origin': r"POL|AOL|port\s+of\s+loading|loading\s+port|airport\s+of\s+(?:loading|departure)|"
-              r"origin(?:\s+(?:port|airport))?",
+              r"origin(?:\s+(?:port|airport))?|collection\s+from|pick[- ]?up\s+from|ship\s+from",
     'destination': r"POD|AOD|port\s+of\s+discharge|discharge\s+port|airport\s+of\s+(?:destination|discharge|arrival)|"
-                   r"destination(?:\s+(?:port|airport))?|place\s+of\s+delivery",
+                   r"destination(?:\s+(?:port|airport))?|place\s+of\s+delivery|deliver(?:y)?\s+to|ship\s+to",
     'container': r"container(?:\s+(?:size|type))?|equipment",
     'transit': r"T\s*/\s*T|TT|transit\s+time",
     'carrier': r"carrier|shipping\s+line",
@@ -49,6 +49,7 @@ FIELDS = {
     'term': r"term|incoterms?",
     'weight': r"chargeable\s+weight",
     'route': r"route",
+    'mode': r"mode(?:\s+of\s+(?:shipment|transport))?|shipment\s+mode|service\s+type",
 }
 LABELS = {'origin': 'POL', 'destination': 'POD', 'container': 'Container size',
           'transit': 'Transit time', 'carrier': 'Carrier', 'airline': 'Airline', 'term': 'Term',
@@ -368,7 +369,24 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                     quantity, uom = count[1], uom or 'container'
                     label = re.sub(r"\s*\bfor\s+" + count[1] + r"\s*[x×]\s*", " ", label, flags=re.I)
                     label = re.sub(r"\b" + count[1] + r"\s*[x×]\s*", "", label, count=1)
+                # "Mode: AIR - Door to Door – DHL" gives the mode, the service
+                # term and the carrier of a bare "Freight" line.
+                mode_field = fields.get('mode') or ''
+                if mode_field:
+                    if not term:
+                        found_term = re.search(r"\b(?:door|port|airport|warehouse)\s+to\s+(?:door|port|airport|warehouse)\b",
+                                               mode_field, re.I)
+                        term = found_term.group(0) if found_term else None
+                    carrier = [part.strip() for part in re.split(r"\s+[-–—]\s+", mode_field)
+                               if part.strip() and not re.search(r"\b(?:air|sea|ocean|road|land|courier|express)\b", part, re.I)
+                               and not SERVICE.search(part)]
+                    if carrier and len(carrier[-1]) <= 20 and not fields.get('carrier'):
+                        fields = dict(fields, carrier=carrier[-1])
                 head = _title(label) + (f" ({_title(term)})" if term else '')
+                field_mode = re.search(r"\b(air|sea|ocean|road|land|courier|express)\b", mode_field, re.I)
+                if field_mode and not re.search(r"\b(?:air|sea|ocean|road|courier|express)\b", head, re.I):
+                    head = f"{field_mode.group(1).title()} {head}" if re.search(r"\bfreight\b", head, re.I) \
+                        else f"{field_mode.group(1).title()} Freight {head}"
                 # Mode comes from the heading above the price only, never from
                 # an inclusions list printed after it.
                 mode = MODE.search('\n'.join(section['lines'][:index])) or (

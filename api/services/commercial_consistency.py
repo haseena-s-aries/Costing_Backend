@@ -232,6 +232,9 @@ def drop_filler_rows(items, result):
 
 def finalize(result):
     items = list(result.get('items') or [])
+    if any(i.get('_description_missing') for i in items):
+        result['_review_reasons'] = list(dict.fromkeys([*(result.get('_review_reasons') or []), 'description_missing_in_source']))
+        result['_needs_review'] = True
     items = single_total_service(result, items)
     if not items:
         return result

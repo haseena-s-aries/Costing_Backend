@@ -2747,6 +2747,11 @@ def _canonical_row_type(value, item=None):
     )
     if "social development dirham" in text:
         return "SERVICE"
+    # Waiting / standby / demurrage / detention / storage charges are
+    # penalties after free time, even when a truck or trailer is named.
+    from api.services.commercial_consistency import PENALTY
+    if PENALTY.search(text):
+        return "CHARGE"
     if route_like or transport_words or (transport_supplier and service_unit):
         return "SERVICE"
 

@@ -2,6 +2,7 @@ import hashlib
 import mimetypes
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.db import transaction
@@ -88,22 +89,35 @@ class UploadService:
                 if freight_items:
                     existing_items = gemini_result.get("items") or []
 
-                    non_freight_items = [
-                        item
-                        for item in existing_items
+                    def _offer_key(item):
+                        try:
+                            price = Decimal(str(item.get("unit_price") or item.get("line_total") or "").replace(",", ""))
+                        except (InvalidOperation, ValueError):
+                            price = None
+                        return price, item.get("currency"), str(item.get("purchase_date") or "")[:10]
+
+                    recovered_keys = {_offer_key(item) for item in freight_items}
+                    existing_keys = {_offer_key(item) for item in existing_items}
+                    # A recovered freight line replaces only the extracted row
+                    # it duplicates (same price, currency and date); other rows
+                    # such as an invoice "FREIGHT CHARGE" are never removed, and
+                    # a freight line already extracted is not added again.
+                    kept_items = [
+                        item for item in existing_items
                         if not (
-                            str(item.get("row_type") or "").upper()
-                            in {"CHARGE", "SERVICE", "PRODUCT"}
-                            and re.search(
-                                r"\bfreight|door\s+to\s+airport|shipment\b",
-                                str(item.get("product_name") or ""),
-                                re.I,
-                            )
+                            _offer_key(item) in recovered_keys
+                            and not item.get("_freight_section_verified")
+                            and not item.get("_source_fact_verified")
+                            and re.search(r"\bfreight|door\s+to\s+(?:airport|door|port)|shipment\b",
+                                          str(item.get("product_name") or ""), re.I)
                         )
                     ]
+                    kept_keys = {_offer_key(item) for item in kept_items}
+                    new_items = [item for item in freight_items if _offer_key(item) not in kept_keys]
 
-                    gemini_result["items"] = non_freight_items + freight_items
-                    gemini_result = normalize_result(gemini_result)
+                    if len(kept_items) != len(existing_items) or new_items:
+                        gemini_result["items"] = kept_items + new_items
+                        gemini_result = normalize_result(gemini_result)
             except Exception:
                 pass
         gemini_sheet = gemini_result_to_virtual_sheet(gemini_result)

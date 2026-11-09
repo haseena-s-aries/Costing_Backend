@@ -153,7 +153,10 @@ def _domain_companies(text):
         name = clean(match[0]).rstrip('.')
         key = re.sub(r"[^a-z]", "", match[1].lower())
         if plausible_company(name) and len(key) >= 5:
-            names.setdefault(key, set()).add(name)
+            # "LONESTAR SHIPPING LLC" and "Lonestar Shipping LLC" are one company.
+            bucket = names.setdefault(key, set())
+            if not any(existing.casefold() == name.casefold() for existing in bucket):
+                bucket.add(name)
     return names
 
 
@@ -393,6 +396,7 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                 if trailing:
                     condition = condition.replace(trailing.group(0).strip(), '')
                 condition = re.sub(SIZE, '', condition).strip(" ()-–,")
+                condition = re.sub(r"^\s*/?\s*per\s+(?:cntr|container|unit|box|truck|trip|shipment)\b\.?", "", condition, flags=re.I).strip(" .")
                 if re.search(r"[A-Za-z]{3}", condition) and not calculation_like(condition):
                     attrs.append({'label': 'Condition', 'value': condition})
                 rows.append({

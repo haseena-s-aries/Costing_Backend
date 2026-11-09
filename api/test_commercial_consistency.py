@@ -172,3 +172,34 @@ class PdfTableRecoveryTests(SimpleTestCase):
                  'items': [{'product_name': 'DO CHARGES', 'unit_price': '525', 'currency': 'AED'}]}, b'%PDF')
         added = [(i['product_name'], i['unit_price'], i['uom'], i['currency']) for i in result['items'][1:]]
         self.assertEqual(added, [('E-TOKEN CHARGES', '55', 'container', 'AED'), ('GAC SERVICE FEE', '750', None, 'AED')])
+
+
+class PenaltyChargeTests(SimpleTestCase):
+    def test_waiting_and_storage_charges_are_charges_but_storage_tank_is_a_product(self):
+        from api.services.gemini_extraction_service import _canonical_row_type
+        self.assertEqual(_canonical_row_type('SERVICE', {'product_name': 'TRUCK WAITING CHARGES AT ORIGIN'}), 'CHARGE')
+        self.assertEqual(_canonical_row_type('PRODUCT', {'product_name': 'Storage charges at port'}), 'CHARGE')
+        self.assertEqual(_canonical_row_type('PRODUCT', {'product_name': 'Storage tank 5000L'}), 'PRODUCT')
+
+
+class UploadFreightRecoveryMergeTests(SimpleTestCase):
+    def test_recovered_freight_lines_never_remove_other_freight_rows(self):
+        from unittest.mock import patch, Mock
+        from django.test import override_settings
+        from api.services import upload_service
+        result = {'items': [
+            dict(product_name='FREIGHT CHARGE', unit_price='30360.00', currency='USD', purchase_date='2026-04-28', row_type='CHARGE'),
+            dict(product_name='Door to Door - Qingdao to Jebel Ali - 40HC', unit_price='3080', currency='USD',
+                 purchase_date='2026-01-29', row_type='SERVICE', _freight_section_verified=True)]}
+        recovered = [dict(product_name='Freight | Chian to Abu Dhabi', unit_price='3080', currency='USD',
+                          purchase_date='2026-01-29', row_type='CHARGE')]
+        orchestrator = Mock(); orchestrator.return_value.extract.return_value = result
+        with override_settings(GEMINI_API_KEY='x'), \
+                patch('api.services.extraction.extraction_orchestrator.ExtractionOrchestrator', orchestrator), \
+                patch('api.services.gemini_extraction_service._extract_pdf_email_freight_charges', return_value=recovered):
+            class File:
+                def seek(self, *_): pass
+                def read(self): return b'%PDF'
+            out = upload_service.UploadService()._parse_with_gemini(File(), 'quote.pdf')
+        names = [row[out['sheets'][0]['rows'][0].index('product_name')] for row in out['sheets'][0]['rows'][1:]]
+        self.assertEqual(sorted(names), ['Door to Door - Qingdao to Jebel Ali - 40HC', 'FREIGHT CHARGE'])

@@ -140,6 +140,13 @@ class DeterministicSpreadsheetParser:
             if isinstance(product, str):
                 # A cell-ending separator ("XB2BVM3LC,") is not part of the name.
                 product = product.strip().rstrip(",;") or None
+            description_missing = False
+            if not product and not supplier_columns:
+                # A priced row whose Description cell is blank (the supplier
+                # referred to a drawing/picture) is still an item: name it
+                # from its model/specification column.
+                product = self._identity_fallback(rows[header_index]["values"], values, columns, serial)
+                description_missing = bool(product)
             if not product:
                 continue
             normalized_product = normalize_header(product)
@@ -168,7 +175,8 @@ class DeterministicSpreadsheetParser:
                     "parent_category": current_parent_category,
                     "quantity": self._value(values, columns["quantity"]), "uom": self._value(values, columns["uom"]) or header_uom,
                     "currency": metadata["currency"], "supplier_name": metadata["supplier_name"],
-                    "source_reference": f"{row['sheet']} row {row['row_number']}"}
+                    "source_reference": f"{row['sheet']} row {row['row_number']}",
+                    "_description_missing": description_missing}
             header_labels = list(rows[header_index - 1]["values"]) if grouped and header_index > 0 else list(rows[header_index]["values"])
             sub_labels = rows[header_index]["values"] if grouped and header_index > 0 else []
             header_labels.extend([""] * max(0, len(values) - len(header_labels)))
@@ -920,6 +928,26 @@ class DeterministicSpreadsheetParser:
             result.append((supplier, price_col, total_col))
             seen.update({price_col, total_col})
         return result
+
+    @classmethod
+    def _identity_fallback(cls, header_values, values, columns, serial=""):
+        """Model/specification text of a priced row with a blank Description."""
+        prices = [cls._value(values, columns.get("unit_price")), cls._value(values, columns.get("line_total"))]
+        if not any(cls._is_nonzero_number(v) for v in prices):
+            return None
+        used = {columns.get(field) for field in FIELDS}
+        for index, label in enumerate(header_values):
+            if index in used or not re.search(r"(?i)\b(?:model|specification|spec|part\s*(?:no|number)|type|make)\b",
+                                              str(label or "")):
+                continue
+            text = re.sub(r"\s+", " ", str(cls._value(values, index) or "")).strip()
+            if not text or cls._is_number(text):
+                continue
+            # "AS PER DRAWING" / "AS PER SAMPLE" names nothing on its own.
+            if re.fullmatch(r"(?i)(?:as\s+per|refer(?:\s+to)?|see)\s+(?:the\s+)?(?:drawing|sample|attached|attachment|spec\w*|photo|picture)s?\.?", text):
+                text = f"Item {serial} - {text}" if serial else text
+            return text
+        return None
 
     @staticmethod
     def _header_unit(header_values, columns):

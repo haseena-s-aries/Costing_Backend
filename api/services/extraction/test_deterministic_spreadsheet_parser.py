@@ -298,3 +298,20 @@ class DeterministicSpreadsheetParserTests(SimpleTestCase):
         from api.services.gemini_extraction_service import _canonical_row_type
         self.assertEqual(_canonical_row_type("PRODUCT", {"product_name": "MCB 2P AMPERE TRIP: 6A CURVE C"}), "PRODUCT")
         self.assertEqual(_canonical_row_type("PRODUCT", {"product_name": "Crane hire per trip"}), "SERVICE")
+
+    def test_priced_row_with_blank_description_uses_model_column(self):
+        rows = [
+            {"sheet": "S", "row_number": 1, "values": ["No.", "Description", "Supply Model", "Quantity (NOS)", "Unit Price (USD/NOS)", "Amount (USD)"]},
+            {"sheet": "S", "row_number": 2, "values": ["1.0", "", "AS PER DRAWING", "1.0", "206.48", "206.48"]},
+            {"sheet": "S", "row_number": 3, "values": ["2.0", "", "HOT DIPPED GALVANIZED ANGLE BAR", "10.0", "20.4", "204.0"]},
+            {"sheet": "S", "row_number": 4, "values": ["3.0", "Plate 10mm", "GALVANIZED PLATE 10mm", "1.0", "11.01", "11.01"]},
+            {"sheet": "S", "row_number": 5, "values": ["4.0", "", "NOTE ONLY", "", "", ""]},
+        ]
+        structure = StructureDetector().detect({"file_type": "spreadsheet", "rows": rows})
+        structure.structure = StructureDetector.STANDARD_TABLE
+        result = DeterministicSpreadsheetParser().extract({"file_type": "spreadsheet", "rows": rows}, structure)
+        self.assertEqual([(i["product_name"], i["unit_price"], i["_description_missing"]) for i in result["items"]], [
+            ("Item 1 - AS PER DRAWING", "206.48", True),
+            ("HOT DIPPED GALVANIZED ANGLE BAR", "20.4", True),
+            ("Plate 10mm", "11.01", False),
+        ])

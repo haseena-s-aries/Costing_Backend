@@ -184,7 +184,8 @@ FILLER = re.compile(
     r"(?:we\s+are\s+|i\s+am\s+)?(?:pleased|happy|glad)\s+to\s+(?:offer|quote|inform|share)(?:\s+you)?|"
     r"(?:please|kindly|pls)\s+(?:find|note|see)(?:\s+(?:below|attached|herewith|our|the))*(?:\s+(?:best\s+)?(?:price|rate|offer|quote|quotation))?|"
     r"(?:our|the)\s+(?:best\s+)?(?:price|rate|offer|quote|quotation)(?:\s+(?:is|will\s+be|as\s+follows))?|"
-    r"as\s+(?:discussed|requested|per\s+your\s+request)|we\s+can\s+offer|we\s+offer|offer(?:ing)?)\b", re.I)
+    r"as\s+(?:discussed|requested|per\s+your\s+request)|we\s+can\s+offer|we\s+offer|offer(?:ing)?|"
+    r"after\s*w[oa]rds?|there\s*after|after\s+that)\b", re.I)
 
 
 def _is_filler(name):

@@ -280,3 +280,31 @@ class CollectionSectionTests(SimpleTestCase):
         self.assertIn({'label': 'Carrier', 'value': 'HMM'}, rows[1]['extra_attributes'])
         self.assertIn({'label': 'Container size', 'value': '40OT'}, rows[0]['extra_attributes'])
         self.assertNotIn('Condition', str(rows[0]['extra_attributes']))
+
+
+COURIER = """From: Agent <agent@examplecargo.example>
+Sent: Thursday, October 22, 2026 11:38 AM
+To: Buyer
+Subject: Re: SHIPMENT FROM UK-PANAMA
+Please find below our rates for subject shipment.
+Collection from
+UK
+Delivery to
+PANAMA
+Weight
+5 KG
+Mode
+AIR - Door to Door – DHL
+Freight – AED 1680 /-   all in excluding customs duty
+Best regards
+Agent
+Example Cargo LLC
+"""
+
+
+class CollectionDeliveryLabelTests(SimpleTestCase):
+    def test_collection_delivery_and_mode_name_the_offer(self):
+        rows = freight_offer_rows(COURIER)
+        self.assertEqual([(r['product_name'], r['unit_price'], r['currency']) for r in rows],
+                         [('Air Freight (Door to Door) - UK to Panama', '1680', 'AED')])
+        self.assertIn({'label': 'Carrier', 'value': 'DHL'}, rows[0]['extra_attributes'])

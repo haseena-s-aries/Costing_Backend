@@ -123,3 +123,56 @@ def recover_table_rows(result, file_bytes):
         result = dict(result, items=items + added)
         result['_pdf_table_rows_added'] = len(added)
     return result
+
+
+# Invoice charge lines with a foreign-currency amount and its local
+# equivalent: "FREIGHT CHARGE 1.000 30,360.00 USD 3.685000 30360.000 111876.600 0%".
+CONVERTED_LINE = re.compile(
+    r"^\s*(?:\d+\s+)?(?P<name>[A-Za-z][^\n]*?)\s+(?P<qty>\d+(?:\.\d+)?)\s+(?P<unit>\d[\d,]*\.\d+)\s+"
+    r"(?P<cur>[A-Z]{3})\s+(?P<roe>\d+\.\d{3,})\s+(?P<amount>\d[\d,]*\.\d+)\s+(?P<local>\d[\d,]*\.\d+)")
+LOCAL_HEADER = re.compile(r"\b(?:amount\s+)?in\s+(?P<code>[A-Z]{3})\b", re.I)
+
+
+def fix_converted_amounts(result, file_bytes):
+    """Keep each charge in the currency it is priced in. A row whose unit
+    price is in USD but whose total/currency came from the local-currency
+    equivalent column (ROE != 1) gets its printed currency and amount; the
+    local amount and exchange rate are kept as attributes."""
+    from api.services.freight_quote_sections import pdf_text
+    text = pdf_text(file_bytes)
+    if not text or not re.search(r"\bROE\b|rate\s+of\s+exchange|exchange\s+rate", text, re.I):
+        return result
+    header = LOCAL_HEADER.search(text)
+    local_code = header['code'].upper() if header else None
+    lines = [m for m in (CONVERTED_LINE.match(line) for line in text.splitlines()) if m]
+    if not lines:
+        return result
+
+    def amount(value):
+        try:
+            return Decimal(str(value).replace(',', ''))
+        except (InvalidOperation, ValueError):
+            return None
+
+    def key(value):
+        return re.sub(r"[^a-z0-9]", "", str(value or '').casefold())
+
+    for item in result.get('items') or []:
+        for match in lines:
+            roe = amount(match['roe'])
+            if not roe or roe == 1 or amount(item.get('unit_price')) != amount(match['unit']):
+                continue
+            name, source = key(item.get('product_name')), key(match['name'])
+            if not name or not (name.startswith(source) or source.startswith(name)):
+                continue
+            item['currency'] = match['cur']
+            item['line_total'] = str(amount(match['amount']))
+            attrs = [a for a in item.get('extra_attributes') or []
+                     if str((a or {}).get('label', '')).casefold() not in {'roe', 'amount in local currency'}]
+            attrs.append({'label': 'ROE', 'value': match['roe']})
+            attrs.append({'label': f"Amount in {local_code}" if local_code else 'Amount in local currency',
+                          'value': str(amount(match['local']))})
+            item['extra_attributes'] = attrs
+            item['_currency_from_source_line'] = True
+            break
+    return result

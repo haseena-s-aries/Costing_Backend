@@ -203,3 +203,22 @@ class UploadFreightRecoveryMergeTests(SimpleTestCase):
             out = upload_service.UploadService()._parse_with_gemini(File(), 'quote.pdf')
         names = [row[out['sheets'][0]['rows'][0].index('product_name')] for row in out['sheets'][0]['rows'][1:]]
         self.assertEqual(sorted(names), ['Door to Door - Qingdao to Jebel Ali - 40HC', 'FREIGHT CHARGE'])
+
+
+class ConvertedAmountTests(SimpleTestCase):
+    def test_foreign_currency_row_keeps_its_currency_and_amount(self):
+        from unittest.mock import patch
+        from api.services import pdf_table_rows
+        text = ("SNo Charge Name Volume Per Unit Currency ROE Amount In AED Rate\n"
+                "1 FREIGHT CHARGE 1.000 30,360.00 USD 3.685000 30360.000 111876.600 0%\n"
+                "2 ADDITIONAL TRANSPORTATION 8.000 550.00 AED 1.000000 4400.000 4400.000 5%\n"
+                "3 TOLL FEE AT ORIGIN DUE TO DELAY 1.000 150.00 USD 3.685000 150.000 552.750 0%\nFROM CARRIER\n")
+        result = {'items': [
+            dict(product_name='FREIGHT CHARGE', unit_price='30360.00', line_total='111876.600', currency='AED'),
+            dict(product_name='ADDITIONAL TRANSPORTATION', unit_price='550.00', line_total='4400.000', currency='AED'),
+            dict(product_name='TOLL FEE AT ORIGIN DUE TO DELAY FROM CARRIER', unit_price='150.00', line_total='552.750', currency='AED')]}
+        with patch('api.services.freight_quote_sections.pdf_text', return_value=text):
+            fixed = pdf_table_rows.fix_converted_amounts(result, b'%PDF')
+        self.assertEqual([(i['currency'], i['line_total']) for i in fixed['items']],
+                         [('USD', '30360.000'), ('AED', '4400.000'), ('USD', '150.000')])
+        self.assertIn({'label': 'Amount in AED', 'value': '111876.600'}, fixed['items'][0]['extra_attributes'])

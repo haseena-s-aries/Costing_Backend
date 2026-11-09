@@ -197,3 +197,53 @@ class AirEstimateTests(SimpleTestCase):
         self.assertEqual({str(r['extra_attributes']) for r in result['items']}, {str([{'label': 'Condition / inclusions', 'value': 'DOOR TO DOOR'}])})
         result = restore_freight_offers(result, AIR_THREAD)
         self.assertEqual(sorted(r['unit_price'] for r in result['items']), ['90800', '93370', '94370'])
+
+
+BREAKBULK = """From: Agent <agent@exampleshipping.example>
+Sent: Thursday, 27 August 2026 3:48 PM
+To: Buyer
+Subject: RE: RFQ sea freight shipment
+Thanks for your enquiry, please find below our break bulk charges.
+Door to Port – USD 23,940/- Under deck , Non-stackable – HVAC UNITS ONLY
+Wooden Packing – USD 9000/-
+Clearance and delivery from Jebel Ali port.
+DO – AED 575/-
+TRANSPORTATION – AED 2700/- PER TRUCK (3 TRUCK required as per dimension)
+POL:Tianjin or nearby
+POD:Jebel Ali
+Thanks & Best Regards
+Agent
+Example Shipping LLC
+From: Agent Two <agent2@examplefreight.example>
+Sent: Wednesday, 21 October 2026 11:30 AM
+To: Buyer
+Subject: RE: PICK UP OF THE MATERIALS FROM DMC TO MBK JETTY
+Please find the charges as follows:
+POL: DXB – AUH
+Transporta(cid:415)on Charges: AED 1350/- ( 7 TON )
+Regards
+Agent Two
+Example Freight LLC
+"""
+
+
+class RouteContextTests(SimpleTestCase):
+    def test_route_and_location_context_make_rows_meaningful(self):
+        from api.services.freight_quote_sections import _restore_ligatures
+        rows = {r['product_name']: r for r in freight_offer_rows(_restore_ligatures(BREAKBULK))}
+        self.assertEqual(set(rows), {
+            'Door to Port - Tianjin to Jebel Ali',
+            'DO - Jebel Ali port',
+            'Transportation - from Jebel Ali port',
+            'Transportation Charges (7 TON) - DXB to AUH',
+        })
+        self.assertIn({'label': 'Condition', 'value': 'Under deck , Non-stackable – HVAC UNITS ONLY'},
+                      rows['Door to Port - Tianjin to Jebel Ali']['extra_attributes'])
+        truck = rows['Transportation - from Jebel Ali port']
+        self.assertEqual((truck['quantity'], truck['uom'], truck['row_type']), ('3', 'truck', 'SERVICE'))
+        self.assertEqual(rows['DO - Jebel Ali port']['row_type'], 'CHARGE')
+
+    def test_terms_prose_is_not_a_location_heading(self):
+        body = ("From: Agent <a@x.example>\nSent: 1 May 2026\nSubject: RE: quote\nSea freight : USD 900/- (DOOR TO DOOR)\n"
+                "Any additional costs arising from inspections will be charged.\nINSPECTION – AED 170/-\nRegards\nX Shipping LLC")
+        self.assertFalse(any('inspections' in r['product_name'] for r in freight_offer_rows(body)))

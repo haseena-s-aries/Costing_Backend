@@ -54,6 +54,10 @@ LABELS = {'origin': 'POL', 'destination': 'POD', 'container': 'Container size',
 # A service term printed in brackets right after the price, e.g.
 # "ALL IN CHARGES : AED 90800/- (DOOR TO DOOR)".
 TRAILING_SERVICE = re.compile(r"^\s*/?\s*-?\s*\((?P<term>[^)]{3,40})\)")
+# Local transport / delivery charges are routed between two places.
+TRANSPORT_LINE = re.compile(r"\b(?:transport\w*|trucking|delivery|pick[- ]?up|haulage|cartage)\b", re.I)
+PLACE_PAIR = re.compile(r"^\s*(?P<a>[A-Za-z][\w .&/]{1,40}?)\s*(?:–|—|->|>|\s-\s|\bto\b)\s*(?P<b>[A-Za-z][\w .&/]{1,40}?)\s*$", re.I)
+FROM_TO = re.compile(r"\bfrom\s+(?P<a>[A-Za-z][\w .&/-]{1,40}?)(?:\s+to\s+(?P<b>[A-Za-z][\w .&/-]{1,40}?))?\s*(?:[.:;,(]|$)", re.I)
 MODE = re.compile(r"\b(?P<mode>AIR|SEA|ROAD|OCEAN)\s+(?:IMPORT|EXPORT|FREIGHT|SHIPMENT|ESTIMATE)\b", re.I)
 SMALL_WORDS = {'to', 'of', 'and', 'at', 'by', 'for', 'in', 'on', 'the', 'via'}
 # A buyer's message accepting an offer: its prices are the supplier's
@@ -68,11 +72,39 @@ SUFFIX = r"(?:L\.?L\.?C\.?|LLC|PTE\.?\s+LTD\.?|CO\.?,?\s*LTD\.?|LTD\.?|LIMITED|I
 def _title(text):
     """Title-case ALL-CAPS source text for a readable description."""
     text = clean(text)
-    # A bare location/airport code stays as printed (HKG, AUH).
-    if text != text.upper() or re.fullmatch(r"[A-Z]{3}", text):
+    # A bare location/airport code or charge code stays as printed (HKG,
+    # AUH, DO, BOE).
+    if text != text.upper() or re.fullmatch(r"[A-Z]{2,4}", text):
         return text
     words = text.lower().split()
     return ' '.join(w if i and w in SMALL_WORDS else w[:1].upper() + w[1:] for i, w in enumerate(words))
+
+
+def _place(value):
+    """Location value without hedges ("Tianjin or nearby" -> "Tianjin")."""
+    value = re.sub(r"\s+or\s+(?:nearby|near\s*by|any|equivalent|similar)\b.*$", "", clean(value), flags=re.I)
+    return value.strip(" .,;:-–")
+
+
+def _transport_route(block, lines, index, fields):
+    """Route of a local transport/delivery charge: the nearest "from X (to
+    Y)" heading above it, a field holding two places ("DXB – AUH"), or the
+    email subject's "from X to Y"."""
+    for line in reversed(lines[:index]):
+        if _price(line) or len(line) > 60:
+            continue
+        match = FROM_TO.search(line)
+        if match and match['a'][:1].isupper():
+            return _place(match['a']), _place(match['b'] or '') or None
+    for key in ('route', 'origin', 'destination'):
+        pair = PLACE_PAIR.match(fields.get(key) or '')
+        if pair:
+            return _place(pair['a']), _place(pair['b'])
+    subject = re.search(r"^Subject\s*:\s*(.*)$", block['text'], re.I | re.M)
+    match = FROM_TO.search(subject[1]) if subject else None
+    if match and match['b']:
+        return _place(match['a']), _place(match['b'])
+    return None, None
 
 
 def _size(text):
@@ -184,6 +216,10 @@ def _price(line):
     return line[:match.start()], number(match['amount']), currency(match['currency']), None, None, None, line[match.end():]
 
 
+def calculation_like(text):
+    return bool(re.search(r"[x×*]\s*\d+.*=", text))
+
+
 def _sections(lines):
     """Split a message into quotation sections at "Option N" headings.
     Lines before the first heading are context shared by every section."""
@@ -230,7 +266,34 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                 label = re.sub(r"\(\s+", "(", label).strip(' :–—-+*/')
                 trailing = TRAILING_SERVICE.match(remainder)
                 term = trailing['term'].strip() if trailing and SERVICE.search(trailing['term']) else None
-                if not label or not (SERVICE.search(label) or term) or NOT_SERVICE.search(label):
+                freight = bool(SERVICE.search(label) or term)
+                transport = not freight and bool(TRANSPORT_LINE.search(label))
+                if label and not (freight or transport) and supplier:
+                    # A charge listed under a location heading ("Clearance and
+                    # delivery from Jebel Ali port") is named with that place.
+                    # A heading is a short line naming a place ("Clearance and
+                    # delivery from Jebel Ali port"), never terms prose.
+                    heading = next((FROM_TO.search(l) for l in reversed(section['lines'][:index])
+                                    if not _price(l) and len(l) <= 60 and FROM_TO.search(l)
+                                    and FROM_TO.search(l)['a'][:1].isupper()), None)
+                    if heading and not heading['b']:
+                        place = _place(heading['a'])
+                        name = f"{_title(label)} - {place}"
+                        condition = re.sub(r"^\s*/\s*[-=]*", "", remainder).strip(" -–")
+                        rows.append({
+                            'row_type': 'CHARGE', 'product_name': name, 'display_name': name,
+                            'quantity': quantity, 'uom': uom, 'unit_price': unit_price, 'line_total': line_total,
+                            'currency': code, 'purchase_date': block['date'], 'quotation_date': block['date'],
+                            'supplier_name': supplier, 'page_number': None,
+                            'extra_attributes': [{'label': 'Location', 'value': place}]
+                            + ([{'label': 'Condition', 'value': condition}] if re.search(r"[A-Za-z]{2}", condition) else []),
+                            'source_block_id': block['id'],
+                            'source_row_id': f"{block['id']}:charge:{section['option'] or 0}:{index}",
+                            'source_reference': block['id'], 'source_context': line,
+                            '_msg_source_verified': True, '_freight_section_verified': True,
+                        })
+                    continue
+                if not label or not (freight or transport) or NOT_SERVICE.search(label):
                     continue
                 if not supplier:
                     continue
@@ -244,6 +307,42 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                     before = _field_values(section['lines'][start:index])
                     after = _field_values(section['lines'][index + 1:end])
                     fields = {**shared_fields, **after, **before}
+                    # A route labelled once for the whole quotation (POL/POD
+                    # after the charges) applies to its freight line.
+                    for key in ('origin', 'destination'):
+                        if not fields.get(key) and section_fields.get(key):
+                            fields[key] = section_fields[key]
+                if transport:
+                    origin, destination = _transport_route(block, section['lines'], index, fields)
+                    if not origin:
+                        continue
+                    detail = re.search(r"\(\s*([^)]{1,30}?)\s*\)", remainder)
+                    head = _title(label) + (f" ({clean(detail[1])})" if detail and not re.search(r"\brequired\b", detail[1], re.I) else '')
+                    route = f"{origin} to {destination}" if destination else f"from {origin}"
+                    name = f"{head} - {route}"
+                    basis = re.search(r"\bper\s+(truck|trailer|trip|container|vehicle|load)\b", remainder, re.I)
+                    count = re.search(r"\(\s*(\d+)\s*(?:trucks?|trailers?|trips?|vehicles?)\s+required", remainder, re.I)
+                    attrs = [{'label': 'From', 'value': origin}] + ([{'label': 'To', 'value': destination}] if destination else [])
+                    condition = re.sub(r"^\s*/\s*[-=]+", "", remainder).strip(" -–")
+                    if detail and condition.strip("() ") == clean(detail[1]):
+                        condition = ''
+                    if condition:
+                        attrs.append({'label': 'Condition', 'value': condition})
+                    rows.append({
+                        'row_type': 'SERVICE', 'product_name': name, 'display_name': name,
+                        'quantity': quantity or (count[1] if count else None),
+                        'uom': uom or (basis[1].lower() if basis else None),
+                        'unit_price': unit_price, 'line_total': line_total, 'currency': code,
+                        'purchase_date': block['date'], 'quotation_date': block['date'],
+                        'supplier_name': supplier, 'page_number': None, 'extra_attributes': attrs,
+                        'source_block_id': block['id'],
+                        'source_row_id': f"{block['id']}:transport:{section['option'] or 0}:{index}",
+                        'source_reference': block['id'], 'source_context': line,
+                        '_msg_source_verified': True, '_freight_section_verified': True,
+                    })
+                    continue
+                fields = {key: (_place(value) if key in ('origin', 'destination') else value)
+                          for key, value in fields.items()}
                 size = _size(remainder) or _size(fields.get('container')) or _size(label)
                 head = _title(label) + (f" ({_title(term)})" if term else '')
                 # Mode comes from the heading above the price only, never from
@@ -267,6 +366,12 @@ def freight_offer_rows(body, sender=None, sent_date=None):
                     attrs.append({'label': 'Container size', 'value': size})
                 if section['option']:
                     attrs.append({'label': 'Quotation option', 'value': f"Option {section['option']}"})
+                condition = re.sub(r"^\s*/\s*[-=]+", "", remainder)
+                if trailing:
+                    condition = condition.replace(trailing.group(0).strip(), '')
+                condition = re.sub(SIZE, '', condition).strip(" ()-–,")
+                if re.search(r"[A-Za-z]{3}", condition) and not calculation_like(condition):
+                    attrs.append({'label': 'Condition', 'value': condition})
                 rows.append({
                     'row_type': 'SERVICE', 'product_name': name, 'display_name': name,
                     'quantity': quantity, 'uom': uom or size, 'unit_price': unit_price,
@@ -330,13 +435,24 @@ def restore_freight_offers(result, body, sender=None, sent_date=None):
     return result
 
 
+# Outlook prints Calibri ligatures as unmapped glyphs ("Transporta(cid:415)on",
+# "o(cid:427)er", "h(cid:425)ps"); restore the letters they stand for.
+LIGATURES = {'(cid:415)': 'ti', '(cid:425)': 'tt', '(cid:427)': 'ff', '(cid:431)': 'ff'}
+
+
+def _restore_ligatures(text):
+    for glyph, letters in LIGATURES.items():
+        text = text.replace(glyph, letters)
+    return text
+
+
 def pdf_text(file_bytes):
     """Visible PDF text without page-number lines ('' when unreadable)."""
     import pdfplumber
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            return '\n'.join('\n'.join(line for line in (page.extract_text() or '').splitlines()
-                                       if not re.fullmatch(r'\s*\d+\s*', line)) for page in pdf.pages)
+            return _restore_ligatures('\n'.join('\n'.join(line for line in (page.extract_text() or '').splitlines()
+                                       if not re.fullmatch(r'\s*\d+\s*', line)) for page in pdf.pages))
     except Exception:
         return ''
 

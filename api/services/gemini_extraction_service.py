@@ -1423,6 +1423,15 @@ def build_canonical_display_name(item):
         label_key = re.sub(r"[^a-z0-9]+", " ", label.casefold()).strip()
         if not value or attr.get('role') == 'financial' or commercial_field(label) or re.search(r'\b(?:price|cost|discount|hike|amount)\b', label_key) or label_key in hidden or value.casefold() in product_key:
             continue
+        # A code already printed in the name with other spacing ("40OT" vs
+        # "40 ft OT") is not repeated; neither is the quotation option.
+        def _compact(text):
+            return re.sub(r"(?<=\d)ft", "", re.sub(r"[^a-z0-9]", "", text.casefold()))
+        compact = _compact(value)
+        if label_key == "quotation option" or (
+                len(compact) >= 3 and re.search(r"\d", compact) and re.search(r"[a-z]", compact)
+                and compact in _compact(product)):
+            continue
         if re.search(r"\b(?:delivery|payment|valid(?:ity)?|vat|tax|freight|discount|lead\s*time|availability)\b", value, re.I):
             continue
         if label_key in {"model"}:
@@ -5036,6 +5045,9 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                 name,
                 flags=re.I,
             ).strip()
+            # "Standby above free time for trailer @ AED 75": "@" and ":"
+            # before the price are not part of the name.
+            name = re.sub(r"\s*[@:=]+\s*$", "", name).strip()
             uom = None
             line_total = amount
             explicit_quantity = re.search(r"[x×]\s*(\d+(?:\.\d+)?)\s*(?:pcs?|pieces?|units?)\b", tail, re.I)

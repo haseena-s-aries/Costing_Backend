@@ -34,7 +34,8 @@ SHIPMENT_REFERENCE = re.compile(
     r'pol|pod|fdc|port of (?:loading|discharge)|final destination|salesman(?: name)?|sales ?person|'
     r'carrier|voyage(?: ?/ ?flight)?(?: no\.?)?|flight(?: no\.?)?|obl|hbl|mbl|awb|bl no\.?|b ?/ ?l(?: no\.?)?|'
     r'commodity|roe|rate of exchange|exchange rate|job no\.?|container(?: no\.?| number)?|'
-    r'shipper(?: name| ref(?:erence)? no\.?)?|consignee(?: name)?|vessel(?: name)?)$')
+    r'shipper(?: name| ref(?:erence)? no\.?)?|consignee(?: name)?|vessel(?: name)?|'
+    r'etd|eta|ets|t ?/ ?t|transit(?: time)?|free time|laycan|cut ?off(?: date)?)$')
 
 
 def hidden_display_attribute(label):

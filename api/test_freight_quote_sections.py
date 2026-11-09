@@ -247,3 +247,36 @@ class RouteContextTests(SimpleTestCase):
         body = ("From: Agent <a@x.example>\nSent: 1 May 2026\nSubject: RE: quote\nSea freight : USD 900/- (DOOR TO DOOR)\n"
                 "Any additional costs arising from inspections will be charged.\nINSPECTION – AED 170/-\nRegards\nX Shipping LLC")
         self.assertFalse(any('inspections' in r['product_name'] for r in freight_offer_rows(body)))
+
+
+COLLECTIONS = """From: Person - Example Kingston <person@examplekingston.example>
+Sent: Thursday, 18 December 2025 2:10 PM
+To: Buyer
+Subject: RE: DOOR TO DOOR DELIVERY FROM CHINA TO UAE
+Please find below current sea freight charges.
+Collection 1
+POL: SHANGHAI
+POD: AUH port ( AUH delivery )
+Ocean Freight FCL charges all in for 7 x 40 ft OT IG (Door to Door) : AED 15,550 / per Cntr
+Carrier : MSC
+Collection 2
+POL: QINGDAO
+POD: AUH port ( AUH delivery )
+Ocean Freight FCL charges all in for 4 x 40 ft HC (Door to Door) : AED 15,573 / per Cntr
+Carrier : HMM
+Standby above free time for trailer @ AED 75/per hour
+PERSON
+Pricing Coordinator
+"""
+
+
+class CollectionSectionTests(SimpleTestCase):
+    def test_collections_keep_route_carrier_count_and_container_type(self):
+        rows = freight_offer_rows(COLLECTIONS)
+        self.assertEqual([(r['product_name'], r['quantity'], r['uom'], r['unit_price'], r['supplier_name']) for r in rows], [
+            ('Ocean Freight FCL charges all in 40 ft OT IG (Door to Door) - Shanghai to AUH port', '7', 'container', '15550', 'Example Kingston'),
+            ('Ocean Freight FCL charges all in 40 ft HC (Door to Door) - Qingdao to AUH port', '4', 'container', '15573', 'Example Kingston'),
+        ])
+        self.assertIn({'label': 'Carrier', 'value': 'HMM'}, rows[1]['extra_attributes'])
+        self.assertIn({'label': 'Container size', 'value': '40OT'}, rows[0]['extra_attributes'])
+        self.assertNotIn('Condition', str(rows[0]['extra_attributes']))

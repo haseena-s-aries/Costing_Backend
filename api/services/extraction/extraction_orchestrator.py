@@ -119,8 +119,9 @@ class ExtractionOrchestrator:
                 result = recover_catalog_rates(result, bytes(raw))
             from api.services.pdf_date_evidence import reject_reference_dates
             result = reject_reference_dates(result, bytes(raw))
-            from api.services.pdf_table_rows import recover_table_rows
+            from api.services.pdf_table_rows import recover_table_rows, fix_converted_amounts
             result = recover_table_rows(result, bytes(raw))
+            result = fix_converted_amounts(result, bytes(raw))
             from api.services.yen_currency_hint import resolve_yen_currency
             from api.services.freight_quote_sections import pdf_text
             result = resolve_yen_currency(result, pdf_text(bytes(raw)))

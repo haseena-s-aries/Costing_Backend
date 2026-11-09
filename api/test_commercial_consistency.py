@@ -129,3 +129,46 @@ class PdfRecoveryNameTests(SimpleTestCase):
         merged = merge_recovery(existing, [fact])
         self.assertEqual([(m['product_name'], m['quantity']) for m in merged],
                          [('Pick up of the materials from DMC to MBK Jetty', None)])
+
+
+class DocumentReferenceDisplayTests(SimpleTestCase):
+    def test_invoice_header_fields_stay_out_of_the_description(self):
+        from api.services.gemini_extraction_service import build_canonical_display_name
+        item = {'product_name': 'PORT STORAGE CHARGE FROM AUH PORT', 'extra_attributes': [
+            {'label': label, 'value': value} for label, value in [
+                ('Container', '42G0 FFAU6555040'), ('Pcs', '0'), ('Weight', '0.000'), ('POL', 'QINGDAO'),
+                ('Salesman Name', 'X'), ('Voyage/Flight no', '1W1MA'), ('OBL', 'COSU1'), ('HBL', 'COSU1'),
+                ('Commodity', '1'), ('ROE', '1.000000'), ('Size', '40HC')]]}
+        self.assertEqual(build_canonical_display_name(item), 'PORT STORAGE CHARGE FROM AUH PORT | Size: 40HC')
+
+    def test_unit_type_attribute_does_not_make_a_fee_a_service(self):
+        from api.services.gemini_extraction_service import _canonical_row_type
+        self.assertEqual(_canonical_row_type('CHARGE', {'product_name': 'DO CHARGES',
+                                                        'display_name': 'DO CHARGES | Unit Type: PER SHIPMENT'}), 'CHARGE')
+
+
+class PdfTableRecoveryTests(SimpleTestCase):
+    def test_skipped_table_rows_are_added_once(self):
+        from unittest.mock import patch
+        from api.services import pdf_table_rows
+        table = [['Description', 'Unit Type', 'AED', 'Comments'],
+                 ['DO CHARGES', 'PER SHIPMENT', '525', 'or at actuals'],
+                 ['E-TOKEN CHARGES', 'PER\nCONTAINER', '55', 'or at actuals'],
+                 ['GAC SERVICE FEE', '', '750', ''],
+                 ['TOTAL', '', '1330', '']]
+
+        class Page:
+            def extract_tables(self):
+                return [table]
+
+        class Pdf:
+            pages = [Page()]
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with patch('pdfplumber.open', return_value=Pdf()):
+            result = pdf_table_rows.recover_table_rows(
+                {'supplier_name': 'Agent', 'document_date': '2025-12-19', 'currency': 'AED',
+                 'items': [{'product_name': 'DO CHARGES', 'unit_price': '525', 'currency': 'AED'}]}, b'%PDF')
+        added = [(i['product_name'], i['unit_price'], i['uom'], i['currency']) for i in result['items'][1:]]
+        self.assertEqual(added, [('E-TOKEN CHARGES', '55', 'container', 'AED'), ('GAC SERVICE FEE', '750', None, 'AED')])

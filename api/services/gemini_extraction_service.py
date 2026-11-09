@@ -2691,8 +2691,10 @@ def _canonical_row_type(value, item=None):
     ):
         return "CHARGE"
 
+    # Only the item identity counts: an attribute such as "Unit Type: PER
+    # SHIPMENT" appended to display_name does not make a fee a transport service.
     name_text = " ".join(
-        str((item or {}).get(key) or "")
+        str((item or {}).get(key) or "").split("|", 1)[0]
         for key in (
             "product_name",
             "product_service_name",
@@ -5064,6 +5066,19 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                 line_total = amount
             if re.search(r"\bfuel\s+price\s+adjustment\b", name, re.I):
                 continue
+            # "afterwords USD 55/hr will be applicable": a connector word is
+            # not a name. After a free-time clause it is a waiting charge;
+            # otherwise it extends the previous charge.
+            if re.fullmatch(r"(?:after\s*w[oa]rds?|there\s*after|after\s+that|beyond\s+(?:that|this)|additional|extra|then)",
+                            name.strip(" .,:;-"), re.I):
+                context = " ".join(lines[max(0, index - 4):index])
+                free_time = re.search(r"\d+\s*(?:hours?|hrs?)\s+of\s+free\s+time[^.]*", context, re.I) or \
+                    re.search(r"free\s+time[^.]*", context, re.I)
+                if free_time:
+                    name = "Waiting charge (after free time)"
+                    extra_attributes.append({"label": "Condition", "value": re.sub(r"\s+", " ", free_time.group(0)).strip(" .")})
+                elif last_tariff_base_name and last_tariff_base_name != tariff_match.group("name"):
+                    name = f"{last_tariff_base_name} (additional)"
             # "Thanks for your enquiry, pleased to offer AED 1600/- per 7 ton
             # from A to B": the text before the amount names nothing; the
             # service is described after the amount and its rate basis.
@@ -5094,6 +5109,10 @@ def _extract_pdf_email_tariff_charge_items(file_bytes, supplier_name=None):
                     name = re.sub(r"\(\s+", "(", line[:first.start()]).strip(" -:")
                 amount, quantity, uom, line_total = (calc["unit_price"], calc["quantity"],
                                                      calc["uom"], calc["line_total"])
+            # "USD 55/hr" is an hourly rate, not a line total.
+            if re.match(r"\s*(?:hrs?|hours?)\b", tail or "", re.I):
+                uom = "HR"
+                line_total = None
             items.append({
                 "row_type": (
                     "CHARGE" if re.search(r"\b(?:certificate|certification|fee|charge|freight|delivery|transport|tax|vat)\b", name, re.I)

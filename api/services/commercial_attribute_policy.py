@@ -26,12 +26,23 @@ def commercial_field(label):
     return None
 
 
+# Shipment / document reference fields (invoice headers, bills of lading)
+# describe the whole document, not the item; keep them as data but out of
+# the item description.
+SHIPMENT_REFERENCE = re.compile(
+    r'^(?:pcs|pieces|no\.? of (?:pcs|pieces|packages)|packages|weight|gross weight|net weight|volume|cbm|'
+    r'pol|pod|fdc|port of (?:loading|discharge)|final destination|salesman(?: name)?|sales ?person|'
+    r'carrier|voyage(?: ?/ ?flight)?(?: no\.?)?|flight(?: no\.?)?|obl|hbl|mbl|awb|bl no\.?|b ?/ ?l(?: no\.?)?|'
+    r'commodity|roe|rate of exchange|exchange rate|job no\.?|container(?: no\.?| number)?|'
+    r'shipper(?: name| ref(?:erence)? no\.?)?|consignee(?: name)?|vessel(?: name)?)$')
+
+
 def hidden_display_attribute(label):
     """Display policy only; historical prices must not become unit-price columns."""
     text = unicodedata.normalize('NFKC', str(label or '')).casefold()
     return bool(commercial_field(label) or re.search(
         r'\b(?:price|cost|budget|discount|hike|amount)\b', text
-    ))
+    ) or SHIPMENT_REFERENCE.match(re.sub(r'\s+', ' ', text).strip(' :')))
 
 
 def clean_commercial_display(item):

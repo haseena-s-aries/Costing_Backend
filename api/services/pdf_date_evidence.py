@@ -15,13 +15,18 @@ def reject_reference_dates_in_text(result, source):
     from .gemini_extraction_service import _valid_date
     reference = re.compile(r'\b(?:ref(?:erence)?\.?\s*(?:no\.?|number|#)?|(?:quotation|quote|invoice|offer|po)\s*(?:no\.?|number|#))\s*[:#]\s*([^\s]+)', re.I)
     references = [m[1] for m in reference.finditer(source)]
+    # A "reference" whose whole value is a date ("Our Ref: 22.10.2026") is
+    # the document's date printed beside the label, not a reference number.
+    date_like = r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2}"
+    printed_dates = {_valid_date(ref) for ref in references if re.fullmatch(date_like, ref) and _valid_date(ref)}
+    references = [ref for ref in references if not (re.fullmatch(date_like, ref) and _valid_date(ref))]
     if not references:
         return result
     without_refs = reference.sub('', source)
     # Explicit document/email date labels, including values on the next line.
     date_values = re.findall(r'(?im)\b(?:date|dated|sent|issued\s+on)\s*[:：]\s*([^\n]+)', without_refs)
     date_values += re.findall(r'(?m)^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})\s*$', without_refs)
-    supported = {_valid_date(value) for value in date_values}
+    supported = {_valid_date(value) for value in date_values} | printed_dates
     rejected = set(result.get('_rejected_reference_dates') or [])
     for record in [result, *(result.get('items') or [])]:
         for field in ('document_date', 'purchase_date'):

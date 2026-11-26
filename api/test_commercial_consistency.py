@@ -222,3 +222,17 @@ class ConvertedAmountTests(SimpleTestCase):
         self.assertEqual([(i['currency'], i['line_total']) for i in fixed['items']],
                          [('USD', '30360.000'), ('AED', '4400.000'), ('USD', '150.000')])
         self.assertIn({'label': 'Amount in AED', 'value': '111876.600'}, fixed['items'][0]['extra_attributes'])
+
+
+class ReferenceLabelDateTests(SimpleTestCase):
+    def test_date_printed_after_reference_label_is_the_document_date(self):
+        from api.services.pdf_date_evidence import reject_reference_dates_in_text
+        source = "Your Ref: Our Ref: 22.10.2026\nQ00909031\nPos ArtNo Type Qty Price USD"
+        result = reject_reference_dates_in_text({'document_date': '2026-10-22', 'items': [{'purchase_date': '2026-10-22'}]}, source)
+        self.assertEqual(result['document_date'], '2026-10-22')
+        self.assertEqual(result['items'][0]['purchase_date'], '2026-10-22')
+
+    def test_date_hidden_inside_a_reference_number_is_still_rejected(self):
+        from api.services.pdf_date_evidence import reject_reference_dates_in_text
+        result = reject_reference_dates_in_text({'document_date': '2026-10-22', 'items': []}, "Our Ref: BJXRC20261022-02")
+        self.assertIsNone(result['document_date'])

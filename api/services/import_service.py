@@ -1657,7 +1657,11 @@ class ImportService:
                             validation_errors=errors,
                             validation_warnings=warnings,
                             is_duplicate=is_duplicate,
-                            duplicate_reference=(f"price_history:{existing_duplicate.id}" if existing_duplicate else fingerprint) if is_duplicate else None,
+                            duplicate_reference=(
+                                f"price_history:{existing_duplicate.id}"
+                                if existing_duplicate
+                                else duplicate_service.reference_for_fingerprint(fingerprint)
+                            ) if is_duplicate else None,
                         )
                         stored_row = ImportRow.objects.get(id=import_row.id)
                         stored_payload = {

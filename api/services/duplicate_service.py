@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+import hashlib
 
 from api.models import PriceHistory
 from api.services.normalization import normalize_text
@@ -17,6 +18,10 @@ class DuplicateService:
             self.source_reference(mapped),
         ]
         return "|".join(normalize_text(part) for part in parts)
+
+    def reference_for_fingerprint(self, fingerprint):
+        """Return a fixed-size database-safe reference for a fingerprint."""
+        return "fingerprint:" + hashlib.sha256(str(fingerprint).encode("utf-8")).hexdigest()
 
     def source_reference(self, mapped):
         return mapped.get("source_reference") or mapped.get("lpo_reference") or mapped.get("grn_reference") or mapped.get("quotation_reference")

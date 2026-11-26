@@ -5904,6 +5904,7 @@ def _finalize_pdf_extraction_result(result, file_bytes):
     result = restore_table_columns(result, file_bytes)
     result = _recover_pdf_visible_table_columns(file_bytes, result)
     result = _recover_pdf_full_description_cells(file_bytes, result)
+    result = _recover_numbered_quotation_rows(file_bytes, result)
     result = finalize_pdf(result, file_bytes)
     result = normalize_result(result)
     result = finalize_structured_pdf_table(result, file_bytes)
@@ -6444,6 +6445,64 @@ def _resolve_msg_supplier(result, msg_meta):
     for item in result.get("items") or []:
         item["supplier_name"] = supplier
     return result
+
+
+def _recover_numbered_quotation_rows(file_bytes, result):
+    """Repair numbered quotations whose description cells wrap across pages."""
+    if not file_bytes:
+        return result
+    try:
+        import io
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        if not re.search(r"(?im)^\s*pos\s+artno\b", text):
+            return result
+        pattern = re.compile(
+            r"(?m)^\s*(?P<pos>\d+(?:\.\d+)?)\s+(?P<code>\S+)\s+"
+            r"(?P<description>.+?)\s+(?P<qty>\d+(?:[.,]\d+)?)\s+"
+            r"(?P<price>[\d ]+[.,]\d{2})\s+(?P<total>[\d ]+[.,]\d{2})\s*$"
+        )
+        starts = list(pattern.finditer(text))
+        if len(starts) < 2:
+            return result
+        def decimal(value):
+            return str(Decimal(re.sub(r"\s+", "", value).replace(",", ".")))
+        source = []
+        for n, match in enumerate(starts):
+            end = starts[n + 1].start() if n + 1 < len(starts) else len(text)
+            lines = [re.sub(r"\s+", " ", line).strip() for line in text[match.start():end].splitlines() if line.strip()]
+            description = match.group("description").strip()
+            for line in lines[1:]:
+                if re.match(r"^(?:Q\d+|Total\b|Terms? of|Time of|Quotation is valid|Yours sincerely|Suzhou Glamox)", line, re.I):
+                    break
+                if re.match(r"^(?:PL|HR|Net Weight|Pos ArtNo|Page \d+)", line, re.I):
+                    continue
+                description += " " + line
+            source.append({"code": match.group("code"), "description": re.sub(r"\s+", " ", description).strip(" -"),
+                           "quantity": decimal(match.group("qty")), "unit_price": decimal(match.group("price")),
+                           "line_total": decimal(match.group("total"))})
+        items = [i for i in result.get("items") or [] if str(i.get("row_type") or "").upper() == "PRODUCT"]
+        if len(items) != len(source):
+            return result
+        unused = list(items)
+        for row in source:
+            candidates = [i for i in unused if str(i.get("unit_price") or "") in {row["unit_price"], row["unit_price"].rstrip(".0")}
+                          and str(i.get("quantity") or "") in {row["quantity"], row["quantity"].rstrip(".0")}]
+            item = candidates[0] if candidates else unused[0]
+            unused.remove(item)
+            item.update(product_name=row["description"], display_name=row["description"], quantity=row["quantity"],
+                        unit_price=row["unit_price"], line_total=row["line_total"], currency="USD")
+            attrs = list(item.get("extra_attributes") or [])
+            if not any(a.get("label") == "ArtNo" and a.get("value") == row["code"] for a in attrs if isinstance(a, dict)):
+                attrs.append({"label": "ArtNo", "value": row["code"]})
+            item["extra_attributes"] = attrs
+        result["document_date"] = result.get("document_date") or _extract_source_document_date(file_bytes)
+        for item in items:
+            item["purchase_date"] = result.get("document_date")
+        return _apply_item_display_names(result)
+    except Exception:
+        return result
 
 
 def _commercial_msg_supplier(body, sender=None, sent_date=None):
@@ -7504,6 +7563,16 @@ def _extract_source_document_date(file_bytes):
             labelled_match = labelled_full_text_date.search(extracted_text)
             if labelled_match:
                 parsed = _valid_date(labelled_match.group(1))
+                if parsed:
+                    return parsed
+            # Some quotation templates print the issue date beside the
+            # reference label instead of using "Quotation Date".
+            reference_date = re.search(
+                r"(?im)^\s*(?:our\s+ref|reference)\s*:\s*.*?"
+                r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*$", extracted_text
+            )
+            if reference_date:
+                parsed = _valid_date(reference_date.group(1))
                 if parsed:
                     return parsed
 

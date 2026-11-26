@@ -3488,10 +3488,17 @@ def _item_has_current_page_commercial_evidence(item, page_bytes, page_number, su
         token for token in re.findall(r"[\w\u0080-\uffff]+", str(item.get("product_name") or "").casefold())
         if len(token) > 2 and not token.isdigit()
     }
-    for word in words:
+    for position, word in enumerate(words):
         text = str(word.get("text") or "").strip()
         # "1600/-" and "1600/=" are printed price endings, not other text.
         amount = _decimal(re.sub(r"/[-=]*$", "", text))
+        if amount not in wanted and position + 1 < len(words):
+            # A space thousands separator splits "3 900,00" into two words.
+            following = words[position + 1]
+            following_text = str(following.get("text") or "").strip()
+            if (re.fullmatch(r"\d{1,3}", text) and re.fullmatch(r"\d{3}(?:[.,]\d{1,2})?", following_text)
+                    and abs(float(following.get("top", 0)) - float(word.get("top", 0))) <= 2):
+                amount = _decimal(text + following_text)
         if amount not in wanted:
             continue
         center_x = (float(word.get("x0", 0)) + float(word.get("x1", 0))) / 2
@@ -7567,9 +7574,11 @@ def _extract_source_document_date(file_bytes):
                     return parsed
             # Some quotation templates print the issue date beside the
             # reference label instead of using "Quotation Date".
+            # The label may follow another one on the same line ("Your Ref:
+            # Our Ref: 22.10.2026"); the value must be a complete date.
             reference_date = re.search(
-                r"(?im)^\s*(?:our\s+ref|reference)\s*:\s*.*?"
-                r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*$", extracted_text
+                r"(?i)\b(?:our\s+ref(?:erence)?|reference|ref)\s*[:.]\s*(?:[^\n:]*?:\s*)?"
+                r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})(?![\d./-])", extracted_text
             )
             if reference_date:
                 parsed = _valid_date(reference_date.group(1))
